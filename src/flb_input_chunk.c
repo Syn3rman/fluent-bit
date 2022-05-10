@@ -1505,7 +1505,7 @@ const void *flb_input_chunk_flush(struct flb_input_chunk *ic, size_t *size)
     }
 
     if (*size > 0) {
-        if ((*buf)[0] == 0) {
+        if (buf[0] == 0) {
             int *crasher;
             crasher = 0;
             *crasher = 1;
