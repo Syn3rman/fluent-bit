@@ -1504,6 +1504,14 @@ const void *flb_input_chunk_flush(struct flb_input_chunk *ic, size_t *size)
         return NULL;
     }
 
+    if (*size > 0) {
+        if ((*buf)[0] == 0) {
+            int *crasher;
+            crasher = 0;
+            *crasher = 1;
+        }
+    }
+
     /* Set it busy as it likely it's a reference for an outgoing task */
     ic->busy = FLB_TRUE;
 
