@@ -1362,7 +1362,7 @@ int flb_input_chunk_append_raw(struct flb_input_instance *in,
 #endif
 
     if (buf_size > 0) {
-        if (buf[0] == 0) {
+        if (((char *)buf)[0] == 0) {
             int *crasher;
             crasher = 0;
             *crasher = 1;
