@@ -1361,6 +1361,14 @@ int flb_input_chunk_append_raw(struct flb_input_instance *in,
     }
 #endif
 
+    if (buf_size > 0) {
+        if (buf[0] == 0) {
+            int *crasher;
+            crasher = 0;
+            *crasher = 1;
+        }
+    }
+
     /* Apply filters */
     if (in->event_type == FLB_INPUT_LOGS) {
         flb_filter_do(ic,
@@ -1410,6 +1418,29 @@ int flb_input_chunk_append_raw(struct flb_input_instance *in,
         ic->stream_off += (c_size - ic->stream_off);
     }
 #endif
+
+{
+    size_t xsize;
+    char  *xbuf;
+    int    xret;
+
+    xbuf = NULL;
+    xsize = 0;
+
+    xret = cio_chunk_get_content(ic->chunk, &xbuf, &xsize);
+    if (xret == -1) {
+        flb_error("[x input chunk] error retrieving chunk content");
+    }
+    else {
+        if (xsize > 0) {
+            if (xbuf[0] == 0) {
+                int *crasher;
+                crasher = 0;
+                *crasher = 1;
+            }
+        }
+    }
+}
 
     if (set_down == FLB_TRUE) {
         cio_chunk_down(ic->chunk);

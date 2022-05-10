@@ -885,8 +885,8 @@ tmp_log_clear(tmp_log_buffer, sizeof(tmp_log_buffer), &tmp_log_index);
             return NULL;
         }
 
-tmp_log_push(tmp_log_buffer, sizeof(tmp_log_buffer), &tmp_log_index,
-             "Allocated %zu bytes at %p | ", (bytes + bytes / 4), out_buf);
+// tmp_log_push(tmp_log_buffer, sizeof(tmp_log_buffer), &tmp_log_index,
+//              "Allocated %zu bytes at %p | ", (bytes + bytes / 4), out_buf);
 
     }
 
@@ -914,14 +914,14 @@ tmp_log_push(tmp_log_buffer, sizeof(tmp_log_buffer), &tmp_log_index,
         root = result.data;
         if (root.type != MSGPACK_OBJECT_ARRAY) {
 
-tmp_log_push(tmp_log_buffer, sizeof(tmp_log_buffer), &tmp_log_index,
-             "Skipping non array (%d)| ");
+// tmp_log_push(tmp_log_buffer, sizeof(tmp_log_buffer), &tmp_log_index,
+//              "Skipping non array (%d)| ");
 
             continue;
         }
         if (root.via.array.size != 2) {
-tmp_log_push(tmp_log_buffer, sizeof(tmp_log_buffer), &tmp_log_index,
-             "Skipping wrong size array | ");
+// tmp_log_push(tmp_log_buffer, sizeof(tmp_log_buffer), &tmp_log_index,
+             // "Skipping wrong size array | ");
 
             continue;
         }
@@ -932,8 +932,8 @@ tmp_log_push(tmp_log_buffer, sizeof(tmp_log_buffer), &tmp_log_index,
         /* Get the record/map */
         map = root.via.array.ptr[1];
         if (map.type != MSGPACK_OBJECT_MAP) {
-tmp_log_push(tmp_log_buffer, sizeof(tmp_log_buffer), &tmp_log_index,
-             "Skipping not map | ");
+// tmp_log_push(tmp_log_buffer, sizeof(tmp_log_buffer), &tmp_log_index,
+//              "Skipping not map | ");
 
             continue;
         }
@@ -990,8 +990,8 @@ tmp_log_push(tmp_log_buffer, sizeof(tmp_log_buffer), &tmp_log_index,
             }
         }
         else {
-tmp_log_push(tmp_log_buffer, sizeof(tmp_log_buffer), &tmp_log_index,
-             "Skipping date key missing | ");
+// tmp_log_push(tmp_log_buffer, sizeof(tmp_log_buffer), &tmp_log_index,
+//              "Skipping date key missing | ");
         }
 
         /* Append remaining keys/values */
@@ -1027,8 +1027,8 @@ tmp_log_push(tmp_log_buffer, sizeof(tmp_log_buffer), &tmp_log_index,
         if (json_format == FLB_PACK_JSON_FORMAT_LINES ||
             json_format == FLB_PACK_JSON_FORMAT_STREAM) {
 
-tmp_log_push(tmp_log_buffer, sizeof(tmp_log_buffer), &tmp_log_index,
-             "CP %d | ", __LINE__);
+// tmp_log_push(tmp_log_buffer, sizeof(tmp_log_buffer), &tmp_log_index,
+//              "CP %d | ", __LINE__);
 
             /* Encode current record into JSON in a temporary variable */
             out_js = flb_msgpack_raw_to_json_sds(tmp_sbuf.data, tmp_sbuf.size);
@@ -1059,8 +1059,8 @@ flb_error("[leo's debug] %s:%d", __FILE__, __LINE__);
 
             /* If a realloc happened, check the returned address */
             if (out_tmp != out_buf) {
-tmp_log_push(tmp_log_buffer, sizeof(tmp_log_buffer), &tmp_log_index,
-             "CP %d (realloc) | ", __LINE__);
+// tmp_log_push(tmp_log_buffer, sizeof(tmp_log_buffer), &tmp_log_index,
+//              "CP %d (realloc) | ", __LINE__);
 
                 out_buf = out_tmp;
             }
@@ -1076,8 +1076,8 @@ flb_error("[leo's debug] %s:%d", __FILE__, __LINE__);
                     return NULL;
                 }
                 if (out_tmp != out_buf) {
-tmp_log_push(tmp_log_buffer, sizeof(tmp_log_buffer), &tmp_log_index,
-             "CP %d (realloc) | ", __LINE__);
+// tmp_log_push(tmp_log_buffer, sizeof(tmp_log_buffer), &tmp_log_index,
+//              "CP %d (realloc) | ", __LINE__);
 
                     out_buf = out_tmp;
                 }
@@ -1116,7 +1116,7 @@ flb_error("[leo's debug] %s:%d", __FILE__, __LINE__);
 
     if (out_buf && flb_sds_len(out_buf) == 0) {
 flb_error("[leo's debug] %s:%d - data = %p | bytes = %zu", __FILE__, __LINE__, data, bytes);
-flb_error("[leo's debug] %s:%d - LOG = %s", __FILE__, __LINE__, tmp_log_buffer);
+// flb_error("[leo's debug] %s:%d - LOG = %s", __FILE__, __LINE__, tmp_log_buffer);
 
         dump_required = 1;
         failure_detected = 1;
