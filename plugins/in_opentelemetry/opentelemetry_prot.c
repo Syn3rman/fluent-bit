@@ -26,6 +26,7 @@
 #include <monkey/mk_core.h>
 #include <cmetrics/cmt_decode_opentelemetry.h>
 
+#include "opentelemetry_logs_service.pb-c.h"
 #include "opentelemetry.h"
 #include "http_conn.h"
 
@@ -156,6 +157,55 @@ static int process_payload_traces(struct flb_opentelemetry *ctx, struct http_con
     return 0;
 }
 
+static void convert_from_binary(uint8_t *in_buf, 
+                                size_t in_size)
+{
+    Opentelemetry__Proto__Collector__Logs__V1__ExportLogsServiceRequest *input_logs;
+    input_logs = opentelemetry__proto__collector__logs__v1__export_logs_service_request__unpack(NULL, in_size, in_buf);
+    if (input_logs == NULL) {
+        return;
+    }
+}
+
+
+static int process_payload_logs(struct flb_opentelemetry *ctx, struct http_conn *conn,
+                                  flb_sds_t tag,
+                                  struct mk_http_session *session,
+                                  struct mk_http_request *request)
+{   
+    int ret;
+    int root_type;
+    char *out_buf = NULL;
+    size_t out_size;
+    msgpack_packer mp_pck;
+    msgpack_sbuffer mp_sbuf;
+    msgpack_sbuffer_init(&mp_sbuf);
+    msgpack_packer_init(&mp_pck, &mp_sbuf, msgpack_sbuffer_write);
+    msgpack_pack_array(&mp_pck, 2);
+    flb_pack_time_now(&mp_pck);
+    /* Check if the incoming payload is a valid JSON message and convert it to msgpack */
+    ret = flb_pack_json(request->data.data, request->data.len, &out_buf, &out_size, &root_type);
+    if (ret == 0 && root_type == JSMN_OBJECT) {
+        /* JSON found, pack it msgpack representation */
+        msgpack_sbuffer_write(&mp_sbuf, out_buf, out_size);
+    }
+    else {
+        /* the content might be a binary payload or invalid JSON */
+        convert_from_binary((uint8_t *) request->data.data, request->data.len);
+        msgpack_pack_map(&mp_pck, 1);
+        msgpack_pack_str_with_body(&mp_pck, "log", 3);
+        msgpack_pack_str_with_body(&mp_pck, request->data.data, request->data.len);
+    }
+    /* release 'out_buf' if it was allocated */
+    if (out_buf) {
+        flb_free(out_buf);
+    }
+    ctx->ins->event_type = FLB_INPUT_LOGS;
+    flb_input_chunk_append_raw(ctx->ins, tag, flb_sds_len(tag), mp_sbuf.data, mp_sbuf.size);
+    msgpack_sbuffer_destroy(&mp_sbuf);
+    return 0;
+}
+
 static inline int mk_http_point_header(mk_ptr_t *h,
                                        struct mk_http_parser *parser, int key)
 {
@@ -208,7 +258,7 @@ int opentelemetry_prot_handle(struct flb_opentelemetry *ctx, struct http_conn *c
         uri[request->uri.len] = '\0';
     }
 
-    if (strcmp(uri, "/v1/metrics") != 0 && strcmp(uri, "/v1/traces") != 0) {
+    if (strcmp(uri, "/v1/metrics") != 0 && strcmp(uri, "/v1/traces") != 0 && strcmp(uri, "/v1/logs") != 0 ) {
         send_response(conn, 400, "error: invalid endpoint\n");
         mk_mem_free(uri);
         return -1;
@@ -285,6 +335,9 @@ int opentelemetry_prot_handle(struct flb_opentelemetry *ctx, struct http_conn *c
     }
     else if (strcmp(uri, "/v1/traces") == 0) {
         ret = process_payload_traces(ctx, conn, tag, session, request);
+    }
+    else if (strcmp(uri, "/v1/logs") == 0) {
+        ret = process_payload_logs(ctx, conn, tag, session, request);
     }
     mk_mem_free(uri);
     flb_sds_destroy(tag);
