@@ -29,8 +29,12 @@
 #include "opentelemetry_logs_service.pb-c.h"
 #include "opentelemetry.h"
 #include "http_conn.h"
+#include "string.h"
 
 #define HTTP_CONTENT_JSON  0
+
+static int otlp_pack_any_value(msgpack_packer *mp_pck, 
+                                       Opentelemetry__Proto__Common__V1__AnyValue *body);
 
 static int send_response(struct http_conn *conn, int http_status, char *message)
 {
@@ -182,9 +186,6 @@ static int otel_pack_double(msgpack_packer *mp_pck, double val)
     return msgpack_pack_double(mp_pck, val);
 }
 
-static int convert_from_otlp_any_value(msgpack_packer *mp_pck, 
-                                       Opentelemetry__Proto__Common__V1__AnyValue *body);
-
 static int otel_pack_kvlist(msgpack_packer *mp_pck,
                             Opentelemetry__Proto__Common__V1__KeyValueList *kv_list)
 {
@@ -193,7 +194,9 @@ static int otel_pack_kvlist(msgpack_packer *mp_pck,
     Opentelemetry__Proto__Common__V1__AnyValue *value;
 
     ret = msgpack_pack_map(mp_pck, kv_list->n_values);
-    if(ret != 0) { return ret; }
+    if (ret != 0) { 
+        return ret;
+    }
 
     for (int i = 0; i < kv_list->n_values && ret == 0; i++) {
         key = kv_list->values[i]->key;
@@ -202,7 +205,7 @@ static int otel_pack_kvlist(msgpack_packer *mp_pck,
         ret = otel_pack_string(mp_pck, key);
 
         if(ret == 0) { 
-           ret = convert_from_otlp_any_value(mp_pck, value);
+           ret = otlp_pack_any_value(mp_pck, value);
         }
     }
 
@@ -213,45 +216,69 @@ static int otel_pack_array(msgpack_packer *mp_pck,
                            Opentelemetry__Proto__Common__V1__ArrayValue *array)
 {
     int ret;
-    for (int i = 0; i < array->n_values; i++) {
-        ret = convert_from_otlp_any_value(mp_pck, array->values[i]);
-        if(ret != 0) { return ret; }
+    int array_index;
+
+    for (array_index = 0; array_index < array->n_values && ret == 0; array_index++) {
+        ret = otlp_pack_any_value(mp_pck, array->values[array_index]);
     }
-    return 0;
+    return ret;
 }
 
-static int convert_from_otlp_any_value(msgpack_packer *mp_pck, 
-                                       Opentelemetry__Proto__Common__V1__AnyValue *body)
+static int otel_pack_bytes(msgpack_packer *mp_pck,
+                           ProtobufCBinaryData bytes)
+{
+    return msgpack_pack_bin_with_body(mp_pck, bytes.data, bytes.len);
+}
+
+static int otlp_pack_any_value(msgpack_packer *mp_pck, 
+                               Opentelemetry__Proto__Common__V1__AnyValue *body)
 {
     int result;
+    
     result = -2;
+
     switch(body->value_case){
         case OPENTELEMETRY__PROTO__COMMON__V1__ANY_VALUE__VALUE_STRING_VALUE:
             result = otel_pack_string(mp_pck, body->string_value);
             break;
+
         case OPENTELEMETRY__PROTO__COMMON__V1__ANY_VALUE__VALUE_BOOL_VALUE:
-            return otel_pack_bool(mp_pck, body->bool_value);
+            result =  otel_pack_bool(mp_pck, body->bool_value);
             break;
+
         case OPENTELEMETRY__PROTO__COMMON__V1__ANY_VALUE__VALUE_INT_VALUE:
-            return otel_pack_int(mp_pck, body->int_value);
+            result = otel_pack_int(mp_pck, body->int_value);
             break;
+
         case OPENTELEMETRY__PROTO__COMMON__V1__ANY_VALUE__VALUE_DOUBLE_VALUE:
-            return otel_pack_double(mp_pck, body->double_value);
+            result = otel_pack_double(mp_pck, body->double_value);
             break;
+
         case OPENTELEMETRY__PROTO__COMMON__V1__ANY_VALUE__VALUE_ARRAY_VALUE:
-            return otel_pack_array(mp_pck, body->array_value);
+            result = otel_pack_array(mp_pck, body->array_value);
             break;
+
         case OPENTELEMETRY__PROTO__COMMON__V1__ANY_VALUE__VALUE_KVLIST_VALUE:
-            return otel_pack_kvlist(mp_pck, body->kvlist_value);
+            result = otel_pack_kvlist(mp_pck, body->kvlist_value);
             break;
+            
         case OPENTELEMETRY__PROTO__COMMON__V1__ANY_VALUE__VALUE_BYTES_VALUE:
+            result = otel_pack_bytes(mp_pck, body->bytes_value);
+            break;
+
+        case OPENTELEMETRY__PROTO__COMMON__V1__ANY_VALUE__VALUE__NOT_SET:
             break;
     }   
+    
+    if (result == -2) {
+        flb_error("[otel]: invalid value type in pack_any_value");
+        result = -1;
+    }
+
     return result;
 }
 
-static int binary_payload_to_msgpack(flb_sds_t tag,
-                                     msgpack_packer *mp_pck,
+static int binary_payload_to_msgpack(msgpack_packer *mp_pck,
                                      uint8_t *in_buf, 
                                      size_t in_size)
 {
@@ -284,12 +311,12 @@ static int binary_payload_to_msgpack(flb_sds_t tag,
         resource_log = resource_logs[resource_logs_index];
         scope_logs = resource_log->scope_logs;
 
-        if (scope_logs == NULL) {
+        if (resource_log->n_scope_logs > 0 && scope_logs == NULL) {
             flb_error("[otel] No scope logs found");
             return -1;
         }
-
-        for (scope_log_index=0 ; scope_log_index<resource_log->n_scope_logs; scope_log_index++) {
+        
+        for (scope_log_index=0 ; scope_log_index < resource_log->n_scope_logs; scope_log_index++) {
             scope_log = scope_logs[scope_log_index];
             log_records = scope_log->log_records;
 
@@ -298,13 +325,14 @@ static int binary_payload_to_msgpack(flb_sds_t tag,
                 return -1;
             }
 
-            for (log_record_index=0; log_record_index<scope_log->n_log_records; log_record_index++) {
+            for (log_record_index=0; log_record_index < scope_log->n_log_records; log_record_index++) {
                 msgpack_pack_array(mp_pck, 2);
                 flb_pack_time_now(mp_pck);
 
                 log_record = log_records[log_record_index];
 
-                ret = convert_from_otlp_any_value(mp_pck, log_record->body);
+                ret = otlp_pack_any_value(mp_pck, log_record->body);
+
                 if (ret != 0) {
                     flb_error("[otel] Failed to convert log record body");
                     return -1;
@@ -315,16 +343,86 @@ static int binary_payload_to_msgpack(flb_sds_t tag,
     return 0;
 }
 
-static void json_payload_to_msgpack(const char *body, 
-                                    size_t len,
-                                    msgpack_packer *mp_pck)
+static int get_token_length(jsmntok_t token){
+    return token.end - token.start;
+}
+
+static char *get_value_from_token(jsmntok_t *tokens,
+                                  const char *body,
+                                  int pos){
+    char *tmp;
+    jsmntok_t token;
+    int token_len;
+
+    token = tokens[pos];
+    token_len = get_token_length(token);
+
+    tmp = flb_calloc(1, token_len + 1);
+    tmp =  memcpy(tmp, body+token.start, token_len);
+
+    return tmp;
+}
+
+static int json_payload_to_msgpack(msgpack_packer *mp_pck,
+                                   const char *body, 
+                                   size_t len)
 {
-    int result;
+    int n_tokens;
+    int index_token;
+    int index_kv;
+    char *key;
+    char *otel_value_type;
+    char *otel_log_record;
     jsmn_parser parser;
     jsmntok_t tokens[1024];
+    jsmntok_t token;
 
     jsmn_init(&parser);
-    result = jsmn_parse(&parser, body, len, tokens, 1024);
+    n_tokens = jsmn_parse(&parser, body, len, tokens, 1024);
+    
+    if (n_tokens < 0) {
+        flb_error("[otel] Failed to parse JSON payload, jsmn error %d", n_tokens);
+        return -1;
+    }
+
+    for (index_token = 1; index_token < n_tokens; index_token++) {
+        token = tokens[index_token];
+
+        printf("[otel] token %d: %.*s\n", token.type, token.end - token.start, body + token.start);
+
+        switch (token.type) {
+            case JSMN_PRIMITIVE:
+                break;
+
+            case JSMN_OBJECT:
+                for (index_kv=0; index_kv < token.size; index_kv++) {
+                    key = get_value_from_token(tokens, body, index_token+index_kv+1);
+                                         
+                    if (strcmp(key, "body") == 0) {
+                        otel_value_type = get_value_from_token(tokens, body, index_token+index_kv+3);
+                        otel_log_record = get_value_from_token(tokens, body, index_token+index_kv+4);
+
+                        msgpack_pack_array(mp_pck, 2);
+                        flb_pack_time_now(mp_pck);
+                        
+                        if (strcasecmp(otel_value_type, "stringvalue") == 0) {
+                            otel_pack_string(mp_pck, otel_log_record);
+                        }
+                        if (strcasecmp(otel_value_type, "intvalue") == 0) {
+                            otel_pack_int(mp_pck, atoi(otel_log_record));
+                        }
+                    }
+                }
+                break;
+
+            case JSMN_ARRAY:
+                break;
+
+            case JSMN_STRING:
+                break;
+        }
+    }
+    return 0;
 }
 
 static int process_payload_logs(struct flb_opentelemetry *ctx, struct http_conn *conn,
@@ -333,41 +431,31 @@ static int process_payload_logs(struct flb_opentelemetry *ctx, struct http_conn 
                                 struct mk_http_request *request)
 {   
     int ret;
-    int root_type;
     char *out_buf = NULL;
-    size_t out_size;
+    char *content_type;
 
     msgpack_packer mp_pck;
     msgpack_sbuffer mp_sbuf;
 
     msgpack_sbuffer_init(&mp_sbuf);
     msgpack_packer_init(&mp_pck, &mp_sbuf, msgpack_sbuffer_write);
-    
+
+    content_type = flb_calloc(1, request->content_type.len + 1);
+    content_type = memcpy(content_type, request->content_type.data, request->content_type.len);
+
     /* Check if the incoming payload is a valid JSON message and convert it to msgpack */
-    // if (strcmp(request->content_type.data, "application/json") == 0) {
-
-        json_payload_to_msgpack(request->data.data, request->data.len, &mp_pck);
-        // ret = flb_pack_json(request->data.data, request->data.len, &out_buf, &out_size, &root_type);
-        // if (ret == 0 && root_type == JSMN_OBJECT) {
-
-        //     /* JSON found, pack it msgpack representation */
-        //     msgpack_pack_array(&mp_pck, 2);
-        //     flb_pack_time_now(&mp_pck);
-        //     msgpack_sbuffer_write(&mp_sbuf, out_buf, out_size);
-            
-        // }
-        // else {
-        //     flb_error("[otel] Invalid JSON message");
-        // }
-
-        return ret;
-    // }
-    // else if (strcmp(request->content_type.data, "application/x-protobuf") == 0){
-
-    //     /* the content might be a binary payload or invalid JSON */
-    //     return binary_payload_to_msgpack(tag, &mp_pck, (uint8_t *)request->data.data, request->data.len);
-
-    // }
+    if (strncasecmp(request->content_type.data, 
+                    "application/json", 
+                    request->content_type.len) == 0) {
+        ret = json_payload_to_msgpack(&mp_pck, request->data.data, request->data.len);
+    }
+    else if (strncasecmp(content_type, "application/x-protobuf") == 0){
+        ret =  binary_payload_to_msgpack(&mp_pck, (uint8_t *)request->data.data, request->data.len);
+    }
+    else {
+        flb_error("[otel] Unsupported content type: %s", content_type);
+        ret = -1;
+    }
 
     /* release 'out_buf' if it was allocated */
     if (out_buf) {
@@ -379,7 +467,7 @@ static int process_payload_logs(struct flb_opentelemetry *ctx, struct http_conn 
     flb_input_chunk_append_raw(ctx->ins, tag, flb_sds_len(tag), mp_sbuf.data, mp_sbuf.size);
    
     msgpack_sbuffer_destroy(&mp_sbuf);
-    return 0;
+    return ret;
 }
 
 static inline int mk_http_point_header(mk_ptr_t *h,
@@ -500,21 +588,7 @@ int opentelemetry_prot_handle(struct flb_opentelemetry *ctx, struct http_conn *c
     }
 
     /* Content Type */
-    header = &session->parser.headers[MK_HEADER_CONTENT_TYPE];
-    if (header->type == MK_HEADER_CONTENT_TYPE) {
-        request->content_type.data = header->val.data;
-        request->content_type.len  = header->val.len;
-    }
-    else {
-        request->content_type.data = NULL;
-    }
-
-    if (request->method != MK_METHOD_POST) {
-        flb_sds_destroy(tag);
-        mk_mem_free(uri);
-        send_response(conn, 400, "error: invalid HTTP method\n");
-        return -1;
-    }
+    mk_http_point_header(&request->content_type, &session->parser, MK_HEADER_CONTENT_TYPE);
 
     if (strcmp(uri, "/v1/metrics") == 0) {
         ret = process_payload_metrics(ctx, conn, tag, session, request);
