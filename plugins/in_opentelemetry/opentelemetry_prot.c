@@ -415,6 +415,74 @@ static char *get_value_from_token(jsmntok_t *tokens,
     return tmp;
 }
 
+static int parse_resource()
+{
+    return 0;
+}
+
+static int parse_resource_logs(msgpack_packer *mp_pck,
+                               jsmntok_t *tokens,
+                               size_t n_tokens)
+{
+    msgpack_pack_map(mp_pck, 2);
+    msgpack_pack_str_with_body(mp_pck, "resource", 8);
+    parse_resource(mp_pck, tokens, n_tokens);
+    return 0;
+}
+
+static int otel_pack_body(msgpack_packer *mp_pck,
+                          char *otel_value_type,
+                          char *otel_log_record)
+{
+    int result;
+    if (strcasecmp(otel_value_type, "stringvalue") == 0) {
+        result = otel_pack_string(mp_pck, otel_log_record);
+    }
+
+    else if (strcasecmp(otel_value_type, "intvalue") == 0) {
+        result = otel_pack_int(mp_pck, atoi(otel_log_record));
+    }
+
+    else if (strcasecmp(otel_value_type, "doublevalue") == 0) {
+        result = otel_pack_double(mp_pck, atof(otel_log_record));
+    }
+
+    else if (strcasecmp(otel_value_type, "boolvalue") == 0) {
+        if (strcasecmp(otel_log_record, "true") == 0) {
+            result = otel_pack_bool(mp_pck, true);
+        } else {
+            result = otel_pack_bool(mp_pck, false);
+        }
+    }
+
+    else if (strcasecmp(otel_value_type, "bytesvalue") == 0){
+        result = otel_pack_string(mp_pck, otel_log_record);
+    }
+    else {
+        flb_error("[otel] Invalid value type");
+        result = -1;
+    }
+    return result;
+}
+
+static int get_log_records_count(jsmntok_t *tokens,
+                                 const char *body,
+                                 size_t n_tokens)
+{
+    size_t log_records_count;
+    size_t token_index;
+
+    log_records_count = 0;
+
+    for (token_index = 0; token_index < n_tokens; token_index++) {
+        if (strcmp(get_value_from_token(tokens, body, token_index+1), "body") == 0)  {
+            log_records_count++;
+        }
+    }
+
+    return log_records_count;
+}
+
 static int json_payload_to_msgpack(msgpack_packer *mp_pck,
                                    const char *body,
                                    size_t len)
@@ -425,6 +493,7 @@ static int json_payload_to_msgpack(msgpack_packer *mp_pck,
     int result;
 
     char *key;
+    char *resource;
     char *otel_value_type;
     char *otel_log_record;
 
@@ -442,58 +511,88 @@ static int json_payload_to_msgpack(msgpack_packer *mp_pck,
         return -1;
     }
 
-    // position 0 is the root object, skip it
     for (token_index = 1; token_index < n_tokens; token_index++) {
         token = tokens[token_index];
+        // printf("Token type: %d %d", token_index, token.type);
+        // printf(" Token: %.*s %d\n", token.end - token.start, body + token.start, token.size);
+
+        //only body and traceid for now
+        // msgpack_pack_map(mp_pck, 2);
 
         switch (token.type) {
+            case JSMN_STRING:
+                if (strcmp(get_value_from_token(tokens, body, token_index), "resource") == 0) {
+                    msgpack_pack_array(mp_pck, 2);
+                    // first element is timestamp
+                    flb_pack_time_now(mp_pck);
 
-            case JSMN_OBJECT:
-                for (kv_index=0; kv_index < token.size; kv_index++) {
-                    key = get_value_from_token(tokens, body, token_index+kv_index+1);
+                    // second element is map
+                    msgpack_pack_map(mp_pck, 2);
 
-                    if (strcmp(key, "body") == 0) {
-                        otel_value_type = get_value_from_token(tokens, body, token_index+kv_index+3);
-                        otel_log_record = get_value_from_token(tokens, body, token_index+kv_index+4);
+                    // key for the first element of the map is resource
+                    msgpack_pack_str_with_body(mp_pck, "resource", 8);
 
-                        msgpack_pack_array(mp_pck, 2);
-                        flb_pack_time_now(mp_pck);
+                    // value for the first element of the map is map
+                    msgpack_pack_map(mp_pck, 1);
 
-                        if (strcasecmp(otel_value_type, "stringvalue") == 0) {
-                            result = otel_pack_string(mp_pck, otel_log_record);
-                        }
+                    // and that map has only one element with key "service.name" and value "otel-collector"
+                    msgpack_pack_str_with_body(mp_pck, "service.name", 12);
+                    msgpack_pack_str_with_body(mp_pck, "otel-collector", 14);
 
-                        else if (strcasecmp(otel_value_type, "intvalue") == 0) {
-                            result = otel_pack_int(mp_pck, atoi(otel_log_record));
-                        }
+                    // key for the second element of the map is log
+                    msgpack_pack_str_with_body(mp_pck, "logs", 4);
 
-                        else if (strcasecmp(otel_value_type, "doublevalue") == 0) {
-                            result = otel_pack_double(mp_pck, atof(otel_log_record));
-                        }
-
-                        else if (strcasecmp(otel_value_type, "boolvalue") == 0) {
-                            if (strcasecmp(otel_log_record, "true") == 0) {
-                                result = otel_pack_bool(mp_pck, true);
-                            } else {
-                                result = otel_pack_bool(mp_pck, false);
-                            }
-                        }
-
-                        else if (strcasecmp(otel_value_type, "bytesvalue") == 0){
-                            result = otel_pack_string(mp_pck, otel_log_record);
-                        }
-
-                        flb_free(otel_value_type);
-                        flb_free(otel_log_record);
-                    }
-
-                    flb_free(key);
+                    // value for the second element of the map is array
+                    msgpack_pack_array(mp_pck, get_log_records_count(tokens, body, n_tokens));
                 }
                 break;
+            case JSMN_ARRAY:
+            case JSMN_OBJECT:
+                if (token.size == 8) {
+                    for (kv_index=0; kv_index < token.size; kv_index++) {
+                        key = get_value_from_token(tokens, body, token_index+kv_index+1);
+                        if (strcmp(key, "body") == 0) {
+                            otel_value_type = get_value_from_token(tokens, body, token_index+kv_index+3);
+                            otel_log_record = get_value_from_token(tokens, body, token_index+kv_index+4);
 
+                            otel_pack_body(mp_pck, otel_value_type, otel_log_record);
+
+                            flb_free(otel_value_type);
+                            flb_free(otel_log_record);
+                        }
+                    }
+                }
+                break;
             default:
                 break;
         }
+
+        // switch (token.type) {
+
+        //     case JSMN_OBJECT:
+        //         for (kv_index=0; kv_index < token.size; kv_index++) {
+        //             key = get_value_from_token(tokens, body, token_index+kv_index+1);
+        //             // print the key
+        //             printf("key: %s\n", key);
+
+        //             if (strcmp(key, "body") == 0) {
+                    //     otel_value_type = get_value_from_token(tokens, body, token_index+kv_index+3);
+                    //     otel_log_record = get_value_from_token(tokens, body, token_index+kv_index+4);
+
+                    //     otel_pack_body(mp_pck, otel_value_type, otel_log_record);
+
+                    //     flb_free(otel_value_type);
+                    //     flb_free(otel_log_record);
+                    // }
+
+        //             flb_free(key);
+        //         }
+        //         printf("\n");
+        //         break;
+
+        //     default:
+        //         break;
+        // }
     }
     return result;
 }
