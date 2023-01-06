@@ -23,6 +23,7 @@
 #include <fluent-bit/flb_time.h>
 #include <fluent-bit/flb_kv.h>
 #include <fluent-bit/flb_pack.h>
+#include <fluent-bit/flb_record_accessor.h>
 
 #include <cfl/cfl.h>
 #include <fluent-otel-proto/fluent-otel.h>
@@ -295,7 +296,6 @@ static void clear_array(Opentelemetry__Proto__Logs__V1__LogRecord **logs,
 
     for (index = 0 ; index < log_count ; index++) {
         otlp_any_value_destroy(logs[index]->body);
-        flb_free(logs[index]);
     }
 
     flb_free(logs);
@@ -709,20 +709,23 @@ static int process_logs(struct flb_event_chunk *event_chunk,
     Opentelemetry__Proto__Common__V1__AnyValue *log_object;
 
     size_t log_record_count;
+    flb_sds_t trace_id;
     size_t index;
     msgpack_unpacked result;
-    msgpack_object *obj;
+    msgpack_object obj;
+    msgpack_object *obj_ptr;
+
     size_t off = 0;
     struct flb_time tm;
     int res = FLB_OK;
 
-    log_record_list = (Opentelemetry__Proto__Logs__V1__LogRecord *) flb_calloc(ctx->batch_size, sizeof(Opentelemetry__Proto__Logs__V1__LogRecord *));
+    log_record_list = (Opentelemetry__Proto__Logs__V1__LogRecord **) flb_calloc(ctx->batch_size, sizeof(Opentelemetry__Proto__Logs__V1__LogRecord *));
     if (!log_record_list) {
         flb_errno();
         return -1;
     }
 
-    log_records = flb_calloc(ctx->batch_size, sizeof(Opentelemetry__Proto__Logs__V1__LogRecord));
+    log_records = (Opentelemetry__Proto__Logs__V1__LogRecord *) flb_calloc(ctx->batch_size, sizeof(Opentelemetry__Proto__Logs__V1__LogRecord));
     if (!log_records) {
         flb_free(log_record_list);
         flb_errno();
@@ -761,13 +764,33 @@ static int process_logs(struct flb_event_chunk *event_chunk,
         }
 
         /* unpack the array of [timestamp, map] */
-        flb_time_pop_from_msgpack(&tm, &result, &obj);
+        obj_ptr = &obj;
+        flb_time_pop_from_msgpack(&tm, &result, &obj_ptr);
+        obj = (msgpack_object) *obj_ptr;
 
-        if (obj->type != MSGPACK_OBJECT_MAP) {
-            continue;
+        if (ctx->trace_id_key){
+            trace_id = flb_ra_translate(ctx->ra_trace_id_key, event_chunk->tag, flb_sds_len(event_chunk->tag), obj, NULL);
+
+            if (!trace_id || flb_sds_len(trace_id) == 0) {
+                flb_plg_warn(ctx->ins,
+                             "empty record accessor key translation for pattern: %s",
+                             ctx->ra_trace_id_key->pattern);
+            }
+            else {
+                log_records[log_record_count].trace_id.data = trace_id;
+
+                if (flb_sds_len(trace_id) != 32) {
+                    flb_plg_error(ctx->ins,
+                                  "incorrect length for trace-id: %d",
+                                  flb_sds_len(trace_id));
+                    return -1;
+                }
+
+                log_records[log_record_count].trace_id.len = 16;
+            }
         }
 
-        log_object = msgpack_object_to_otlp_any_value(obj);
+        log_object = msgpack_object_to_otlp_any_value(&obj);
 
         log_records[log_record_count].body = log_object;
         log_records[log_record_count].time_unix_nano = flb_time_to_nanosec(&tm);
@@ -802,6 +825,7 @@ static int process_logs(struct flb_event_chunk *event_chunk,
     }
 
     flb_free(log_bodies);
+    flb_free(log_records);
     msgpack_unpacked_destroy(&result);
 
     return res;
@@ -1082,6 +1106,11 @@ static struct flb_config_map config_map[] = {
      FLB_CONFIG_MAP_BOOL, "log_response_payload", "true",
      0, FLB_TRUE, offsetof(struct opentelemetry_context, log_response_payload),
      "Specify if the response paylod should be logged or not"
+    },
+    {
+     FLB_CONFIG_MAP_STR, "trace_id_key", NULL,
+     0, FLB_TRUE, offsetof(struct opentelemetry_context, trace_id_key),
+     "Specify the key name that will be used to extract the trace id."
     },
     {
       FLB_CONFIG_MAP_INT, "batch_size", DEFAULT_LOG_RECORD_BATCH_SIZE,

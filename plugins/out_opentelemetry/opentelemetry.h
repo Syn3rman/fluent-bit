@@ -51,6 +51,10 @@ struct opentelemetry_context {
     char *host;
     int port;
 
+    /* trace id key */
+    flb_sds_t trace_id_key;
+    struct flb_record_accessor *ra_trace_id_key;
+
     /* Number of logs to flush at a time */
     int batch_size;
 

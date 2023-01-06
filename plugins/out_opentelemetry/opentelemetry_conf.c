@@ -22,6 +22,7 @@
 #include <fluent-bit/flb_pack.h>
 #include <fluent-bit/flb_sds.h>
 #include <fluent-bit/flb_kv.h>
+#include <fluent-bit/flb_record_accessor.h>
 
 #include "opentelemetry.h"
 #include "opentelemetry_conf.h"
@@ -229,6 +230,23 @@ struct opentelemetry_context *flb_opentelemetry_context_create(
         ctx->metrics_uri = metrics_uri;
     }
 
+    if (ctx->trace_id_key) {
+        if (ctx->trace_id_key[0] != '$') {
+            flb_plg_error(ctx->ins,
+                          "invalid trace_id_key pattern, it must start with '$'");
+            flb_opentelemetry_context_destroy(ctx);
+            return NULL;
+        }
+        ctx->ra_trace_id_key = flb_ra_create(ctx->trace_id_key, FLB_TRUE);
+        if (!ctx->ra_trace_id_key) {
+            flb_plg_error(ctx->ins,
+                          "cannot create record accessor for trace_id_key pattern: '%s'",
+                          ctx->trace_id_key);
+            flb_opentelemetry_context_destroy(ctx);
+            return NULL;
+        }
+    }
+
 
     /* Set instance flags into upstream */
     flb_output_upstream_set(ctx->u, ins);
@@ -255,6 +273,10 @@ void flb_opentelemetry_context_destroy(
 
     if (ctx->u) {
         flb_upstream_destroy(ctx->u);
+    }
+
+    if (ctx->ra_trace_id_key) {
+        flb_ra_destroy(ctx->ra_trace_id_key);
     }
 
     flb_free(ctx->proxy_host);
