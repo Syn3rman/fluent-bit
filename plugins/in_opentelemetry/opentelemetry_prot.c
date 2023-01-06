@@ -427,6 +427,8 @@ static int json_payload_to_msgpack(msgpack_packer *mp_pck,
     char *key;
     char *otel_value_type;
     char *otel_log_record;
+    char *token_val;
+    char *trace_id;
 
     jsmn_parser parser;
     jsmntok_t tokens[1024];
@@ -445,6 +447,7 @@ static int json_payload_to_msgpack(msgpack_packer *mp_pck,
     // position 0 is the root object, skip it
     for (token_index = 1; token_index < n_tokens; token_index++) {
         token = tokens[token_index];
+        token_val = get_value_from_token(tokens, body, token_index);
 
         switch (token.type) {
 
@@ -457,7 +460,12 @@ static int json_payload_to_msgpack(msgpack_packer *mp_pck,
                         otel_log_record = get_value_from_token(tokens, body, token_index+kv_index+4);
 
                         msgpack_pack_array(mp_pck, 2);
+                        /* The array is of format [ timestamp, log record ]*/
                         flb_pack_time_now(mp_pck);
+
+                        /* Create a structured json representation of the otel log record*/
+                        msgpack_pack_map(mp_pck, 2);
+                        msgpack_pack_str_with_body(mp_pck, "body", 4);
 
                         if (strcasecmp(otel_value_type, "stringvalue") == 0) {
                             result = otel_pack_string(mp_pck, otel_log_record);
@@ -486,10 +494,19 @@ static int json_payload_to_msgpack(msgpack_packer *mp_pck,
                         flb_free(otel_value_type);
                         flb_free(otel_log_record);
                     }
+                    else if (strcasecmp(key, "trace_id") == 0) {
+                    }
 
                     flb_free(key);
                 }
                 break;
+
+            case JSMN_STRING:
+                if (strcasecmp(token_val, "traceid") == 0) {
+                    msgpack_pack_str_with_body(mp_pck, "traceid", 7);
+                    trace_id = get_value_from_token(tokens, body, token_index+1);
+                    msgpack_pack_str_with_body(mp_pck, trace_id, tokens[token_index+1].end - tokens[token_index+1].start);
+                }
 
             default:
                 break;
