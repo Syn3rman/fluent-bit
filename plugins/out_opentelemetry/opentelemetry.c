@@ -768,26 +768,25 @@ static int process_logs(struct flb_event_chunk *event_chunk,
         flb_time_pop_from_msgpack(&tm, &result, &obj_ptr);
         obj = (msgpack_object) *obj_ptr;
 
-        if (ctx->trace_id_key){
-            trace_id = flb_ra_translate(ctx->ra_trace_id_key, event_chunk->tag, flb_sds_len(event_chunk->tag), obj, NULL);
+        trace_id = flb_ra_translate(ctx->ra_trace_id_key, event_chunk->tag, flb_sds_len(event_chunk->tag), obj, NULL);
+        // flb_ra_translate(ctx->ra_body_key, event_chunk->tag, flb_sds_len(event_chunk->tag), obj, NULL)
 
-            if (!trace_id || flb_sds_len(trace_id) == 0) {
-                flb_plg_warn(ctx->ins,
-                             "empty record accessor key translation for pattern: %s",
-                             ctx->ra_trace_id_key->pattern);
+        if (!trace_id || flb_sds_len(trace_id) == 0) {
+            flb_plg_warn(ctx->ins,
+                            "empty record accessor key translation for pattern: %s",
+                            ctx->ra_trace_id_key->pattern);
+        }
+        else {
+            log_records[log_record_count].trace_id.data = trace_id;
+
+            if (flb_sds_len(trace_id) != 32) {
+                flb_plg_error(ctx->ins,
+                                "incorrect length for trace-id: %d",
+                                flb_sds_len(trace_id));
+                return -1;
             }
-            else {
-                log_records[log_record_count].trace_id.data = trace_id;
 
-                if (flb_sds_len(trace_id) != 32) {
-                    flb_plg_error(ctx->ins,
-                                  "incorrect length for trace-id: %d",
-                                  flb_sds_len(trace_id));
-                    return -1;
-                }
-
-                log_records[log_record_count].trace_id.len = 16;
-            }
+            log_records[log_record_count].trace_id.len = 16;
         }
 
         log_object = msgpack_object_to_otlp_any_value(&obj);
@@ -1108,9 +1107,14 @@ static struct flb_config_map config_map[] = {
      "Specify if the response paylod should be logged or not"
     },
     {
-     FLB_CONFIG_MAP_STR, "trace_id_key", NULL,
+     FLB_CONFIG_MAP_STR, "trace_id_key", "$traceid",
      0, FLB_TRUE, offsetof(struct opentelemetry_context, trace_id_key),
      "Specify the key name that will be used to extract the trace id."
+    },
+    {
+     FLB_CONFIG_MAP_STR, "body_key", "$body",
+     0, FLB_TRUE, offsetof(struct opentelemetry_context, body_key),
+     "Specify the key name that will be used to extract the log message."
     },
     {
       FLB_CONFIG_MAP_INT, "batch_size", DEFAULT_LOG_RECORD_BATCH_SIZE,

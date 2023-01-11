@@ -212,6 +212,26 @@ static int process_payload_traces(struct flb_opentelemetry *ctx, struct http_con
     return result;
 }
 
+static int get_token_length(jsmntok_t token){
+    return token.end - token.start;
+}
+
+static char *get_value_from_token(jsmntok_t *tokens,
+                                  const char *body,
+                                  int pos){
+    char *tmp;
+    jsmntok_t token;
+    int token_len;
+
+    token = tokens[pos];
+    token_len = get_token_length(token);
+
+    tmp = flb_calloc(1, token_len + 1);
+    tmp =  memcpy(tmp, body+token.start, token_len);
+
+    return tmp;
+}
+
 static int otel_pack_string(msgpack_packer *mp_pck, char *str)
 {
     return msgpack_pack_str_with_body(mp_pck, str, strlen(str));
@@ -330,6 +350,39 @@ static int otlp_pack_any_value(msgpack_packer *mp_pck,
     return result;
 }
 
+static int otel_pack_jsmn_object(msgpack_packer *mp_pck,
+                                 jsmntok_t *tokens,
+                                 char *body,
+                                 size_t index,
+                                 size_t count)
+{
+    size_t start;
+    size_t end;
+
+    char *field;
+    flb_sds_t key;
+
+    start = tokens[index].start;
+    end = tokens[index].end;
+
+    // msgpack_pack_map(mp_pck, count);
+
+    while(start < end) {
+        field = get_value_from_token(tokens, body, index);
+
+        if (strcasecmp(field, "key") == 0) {
+            key = get_value_from_token(tokens, body, index+1);
+            // msgpack_pack_str_with_body(mp_pck, key, get_token_length(tokens[index+1]));
+        }
+        else if (strcasecmp(field, "value") == 0) {
+            // pack_jsmn_any_value();
+        }
+
+        index++;
+        start = tokens[index].end;
+    }
+}
+
 static int binary_payload_to_msgpack(msgpack_packer *mp_pck,
                                      uint8_t *in_buf,
                                      size_t in_size)
@@ -395,26 +448,6 @@ static int binary_payload_to_msgpack(msgpack_packer *mp_pck,
     return 0;
 }
 
-static int get_token_length(jsmntok_t token){
-    return token.end - token.start;
-}
-
-static char *get_value_from_token(jsmntok_t *tokens,
-                                  const char *body,
-                                  int pos){
-    char *tmp;
-    jsmntok_t token;
-    int token_len;
-
-    token = tokens[pos];
-    token_len = get_token_length(token);
-
-    tmp = flb_calloc(1, token_len + 1);
-    tmp =  memcpy(tmp, body+token.start, token_len);
-
-    return tmp;
-}
-
 static int json_payload_to_msgpack(msgpack_packer *mp_pck,
                                    const char *body,
                                    size_t len)
@@ -429,6 +462,7 @@ static int json_payload_to_msgpack(msgpack_packer *mp_pck,
     char *otel_log_record;
     char *token_val;
     char *trace_id;
+    char *span_id;
 
     jsmn_parser parser;
     jsmntok_t tokens[1024];
@@ -444,7 +478,17 @@ static int json_payload_to_msgpack(msgpack_packer *mp_pck,
         return -1;
     }
 
-    // position 0 is the root object, skip it
+    /* position 0 is the root object, skip it
+     * The log records have a type of JSMN_OBJECT and have 8 keys:
+     * timeUnixNano, severityNumber, severityText, body, attributes,
+     * droppedAttributesCount, spanId, and traceId.
+     *
+     * Whenever we encounter a JSMN_OBJECT, we iterate through the keys
+     * to check if it is a log record, and pack the fields if these fields are found.
+     *
+     * This way we are sure that all the fields that we parse belong to the same record.
+     */
+
     for (token_index = 1; token_index < n_tokens; token_index++) {
         token = tokens[token_index];
         token_val = get_value_from_token(tokens, body, token_index);
@@ -463,8 +507,7 @@ static int json_payload_to_msgpack(msgpack_packer *mp_pck,
                         /* The array is of format [ timestamp, log record ]*/
                         flb_pack_time_now(mp_pck);
 
-                        /* Create a structured json representation of the otel log record*/
-                        msgpack_pack_map(mp_pck, 2);
+                        msgpack_pack_map(mp_pck, 3);
                         msgpack_pack_str_with_body(mp_pck, "body", 4);
 
                         if (strcasecmp(otel_value_type, "stringvalue") == 0) {
@@ -491,10 +534,13 @@ static int json_payload_to_msgpack(msgpack_packer *mp_pck,
                             result = otel_pack_string(mp_pck, otel_log_record);
                         }
 
+                        else if (strcasecmp(otel_value_type, "mapvalue") == 0){
+                            // one key:value pair is counted as 2 tokens
+                            otel_pack_jsmn_object(mp_pck, tokens, body, token_index+kv_index+4, tokens[token_index+kv_index+4].size/2);
+                        }
+
                         flb_free(otel_value_type);
                         flb_free(otel_log_record);
-                    }
-                    else if (strcasecmp(key, "trace_id") == 0) {
                     }
 
                     flb_free(key);
@@ -507,11 +553,20 @@ static int json_payload_to_msgpack(msgpack_packer *mp_pck,
                     trace_id = get_value_from_token(tokens, body, token_index+1);
                     msgpack_pack_str_with_body(mp_pck, trace_id, tokens[token_index+1].end - tokens[token_index+1].start);
                 }
+                else if (strcasecmp(token_val, "spanid") == 0) {
+                    msgpack_pack_str_with_body(mp_pck, "spanid", 6);
+                    span_id = get_value_from_token(tokens, body, token_index+1);
+                    msgpack_pack_str_with_body(mp_pck, span_id, tokens[token_index+1].end - tokens[token_index+1].start);
+                }
 
             default:
                 break;
         }
     }
+
+    flb_free(trace_id);
+    flb_free(span_id);
+
     return result;
 }
 

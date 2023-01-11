@@ -230,21 +230,34 @@ struct opentelemetry_context *flb_opentelemetry_context_create(
         ctx->metrics_uri = metrics_uri;
     }
 
-    if (ctx->trace_id_key) {
-        if (ctx->trace_id_key[0] != '$') {
-            flb_plg_error(ctx->ins,
-                          "invalid trace_id_key pattern, it must start with '$'");
-            flb_opentelemetry_context_destroy(ctx);
-            return NULL;
-        }
-        ctx->ra_trace_id_key = flb_ra_create(ctx->trace_id_key, FLB_TRUE);
-        if (!ctx->ra_trace_id_key) {
-            flb_plg_error(ctx->ins,
-                          "cannot create record accessor for trace_id_key pattern: '%s'",
-                          ctx->trace_id_key);
-            flb_opentelemetry_context_destroy(ctx);
-            return NULL;
-        }
+    if (ctx->trace_id_key[0] != '$') {
+        flb_plg_error(ctx->ins,
+                        "invalid trace_id_key pattern, it must start with '$'");
+        flb_opentelemetry_context_destroy(ctx);
+        return NULL;
+    }
+    ctx->ra_trace_id_key = flb_ra_create(ctx->trace_id_key, FLB_TRUE);
+    if (!ctx->ra_trace_id_key) {
+        flb_plg_error(ctx->ins,
+                        "cannot create record accessor for trace_id_key pattern: '%s'",
+                        ctx->trace_id_key);
+        flb_opentelemetry_context_destroy(ctx);
+        return NULL;
+    }
+
+    if (ctx->body_key[0] != '$') {
+        flb_plg_error(ctx->ins,
+                        "invalid trace_id_key pattern, it must start with '$'");
+        flb_opentelemetry_context_destroy(ctx);
+        return NULL;
+    }
+    ctx->ra_body_key = flb_ra_create(ctx->body_key, FLB_TRUE);
+    if (!ctx->ra_body_key) {
+        flb_plg_error(ctx->ins,
+                        "cannot create record accessor for body_key pattern: '%s'",
+                        ctx->body_key);
+        flb_opentelemetry_context_destroy(ctx);
+        return NULL;
     }
 
 
