@@ -212,26 +212,6 @@ static int process_payload_traces(struct flb_opentelemetry *ctx, struct http_con
     return result;
 }
 
-static int get_token_length(jsmntok_t token){
-    return token.end - token.start;
-}
-
-static char *get_value_from_token(jsmntok_t *tokens,
-                                  const char *body,
-                                  int pos){
-    char *tmp;
-    jsmntok_t token;
-    int token_len;
-
-    token = tokens[pos];
-    token_len = get_token_length(token);
-
-    tmp = flb_calloc(1, token_len + 1);
-    tmp =  memcpy(tmp, body+token.start, token_len);
-
-    return tmp;
-}
-
 static int otel_pack_string(msgpack_packer *mp_pck, char *str)
 {
     return msgpack_pack_str_with_body(mp_pck, str, strlen(str));
@@ -350,39 +330,6 @@ static int otlp_pack_any_value(msgpack_packer *mp_pck,
     return result;
 }
 
-static int otel_pack_jsmn_object(msgpack_packer *mp_pck,
-                                 jsmntok_t *tokens,
-                                 char *body,
-                                 size_t index,
-                                 size_t count)
-{
-    size_t start;
-    size_t end;
-
-    char *field;
-    flb_sds_t key;
-
-    start = tokens[index].start;
-    end = tokens[index].end;
-
-    // msgpack_pack_map(mp_pck, count);
-
-    while(start < end) {
-        field = get_value_from_token(tokens, body, index);
-
-        if (strcasecmp(field, "key") == 0) {
-            key = get_value_from_token(tokens, body, index+1);
-            // msgpack_pack_str_with_body(mp_pck, key, get_token_length(tokens[index+1]));
-        }
-        else if (strcasecmp(field, "value") == 0) {
-            // pack_jsmn_any_value();
-        }
-
-        index++;
-        start = tokens[index].end;
-    }
-}
-
 static int binary_payload_to_msgpack(msgpack_packer *mp_pck,
                                      uint8_t *in_buf,
                                      size_t in_size)
@@ -448,124 +395,97 @@ static int binary_payload_to_msgpack(msgpack_packer *mp_pck,
     return 0;
 }
 
+static int parse_resource(msgpack_packer *mp_pck,
+                          msgpack_object_map resource)
+{
+
+}
+
+static int parse_resource_logs(msgpack_packer *mp_pck,
+                               msgpack_object_array resource_logs)
+{
+    size_t resource_log_index;
+    size_t resource_index;
+    msgpack_object_map resource_log;
+
+    for (resource_log_index = 0;
+         resource_log_index < resource_logs.size;
+         resource_log_index++) {
+
+        resource_log = resource_logs.ptr[resource_log_index].via.map;
+
+        if (resource_log.size != 2) {
+            flb_error("[otel] Invalid JSON payload, a resource log must only have 2 fields: resource & scope logs");
+            return -1;
+        }
+
+        for (resource_index = 0;
+             resource_index < resource_log.size;
+             resource_index++) {
+                if (strncasecmp("resource",
+                                 resource_log.ptr[resource_index].key.via.str.ptr,
+                                 resource_log.ptr[resource_index].key.via.str.size) == 0) {
+                    parse_resource(mp_pck, resource_log.ptr[resource_index].val.via.map);
+                }
+            }
+
+    }
+}
+
+/*
+ * Decode the JSON payload.
+ * A valid payload must be in the form defined in the OpenTelemetry proto file:
+ * https://github.com/open-telemetry/opentelemetry-proto/blob/main/opentelemetry/proto/logs/v1/logs.proto
+ */
+static int parse_json_export_service_request(msgpack_packer *mp_pck,
+                                             char *buf,
+                                             size_t buf_size)
+{
+    size_t off = 0;
+    msgpack_unpacked result;
+    msgpack_object root;
+    msgpack_object_map resource_logs_map;
+
+    msgpack_unpacked_init(&result);
+    while (msgpack_unpack_next(&result, buf, buf_size, &off) == MSGPACK_UNPACK_SUCCESS) {
+        root = result.data;
+        resource_logs_map = root.via.map;
+
+        if (root.type != MSGPACK_OBJECT_MAP ||
+            resource_logs_map.size != 1 ||
+            strncasecmp(resource_logs_map.ptr[0].key.via.str.ptr, "resourcelogs", resource_logs_map.ptr[0].key.via.str.size)) {
+                flb_error("[otel] Invalid JSON payload");
+                return -1;
+        }
+
+        parse_resource_logs(mp_pck, resource_logs_map.ptr[0].val.via.array);
+    }
+}
+
 static int json_payload_to_msgpack(msgpack_packer *mp_pck,
                                    const char *body,
                                    size_t len)
 {
-    int n_tokens;
-    int token_index;
-    int kv_index;
+    size_t buf_size;
+    int root_type;
     int result;
+    char *buf;
 
-    char *key;
-    char *otel_value_type;
-    char *otel_log_record;
-    char *token_val;
-    char *trace_id;
-    char *span_id;
+    /*
+     * Convert the json to msgpack to make parsing easier
+     */
 
-    jsmn_parser parser;
-    jsmntok_t tokens[1024];
-    jsmntok_t token;
-
-    result = 0;
-
-    jsmn_init(&parser);
-    n_tokens = jsmn_parse(&parser, body, len, tokens, 1024);
-
-    if (n_tokens < 0) {
-        flb_error("[otel] Failed to parse JSON payload, jsmn error %d", n_tokens);
+    result = flb_pack_json(body, len, &buf, &buf_size, &root_type);
+    if (result == FLB_ERR_JSON_PART) {
+        printf("data incomplete");
+        return -1;
+    }
+    else if (result == FLB_ERR_JSON_INVAL) {
+        printf("invalid JSON message, skipping");
         return -1;
     }
 
-    /* position 0 is the root object, skip it
-     * The log records have a type of JSMN_OBJECT and have 8 keys:
-     * timeUnixNano, severityNumber, severityText, body, attributes,
-     * droppedAttributesCount, spanId, and traceId.
-     *
-     * Whenever we encounter a JSMN_OBJECT, we iterate through the keys
-     * to check if it is a log record, and pack the fields if these fields are found.
-     *
-     * This way we are sure that all the fields that we parse belong to the same record.
-     */
-
-    for (token_index = 1; token_index < n_tokens; token_index++) {
-        token = tokens[token_index];
-        token_val = get_value_from_token(tokens, body, token_index);
-
-        switch (token.type) {
-
-            case JSMN_OBJECT:
-                for (kv_index=0; kv_index < token.size; kv_index++) {
-                    key = get_value_from_token(tokens, body, token_index+kv_index+1);
-
-                    if (strcmp(key, "body") == 0) {
-                        otel_value_type = get_value_from_token(tokens, body, token_index+kv_index+3);
-                        otel_log_record = get_value_from_token(tokens, body, token_index+kv_index+4);
-
-                        msgpack_pack_array(mp_pck, 2);
-                        /* The array is of format [ timestamp, log record ]*/
-                        flb_pack_time_now(mp_pck);
-
-                        msgpack_pack_map(mp_pck, 3);
-                        msgpack_pack_str_with_body(mp_pck, "body", 4);
-
-                        if (strcasecmp(otel_value_type, "stringvalue") == 0) {
-                            result = otel_pack_string(mp_pck, otel_log_record);
-                        }
-
-                        else if (strcasecmp(otel_value_type, "intvalue") == 0) {
-                            result = otel_pack_int(mp_pck, atoi(otel_log_record));
-                        }
-
-                        else if (strcasecmp(otel_value_type, "doublevalue") == 0) {
-                            result = otel_pack_double(mp_pck, atof(otel_log_record));
-                        }
-
-                        else if (strcasecmp(otel_value_type, "boolvalue") == 0) {
-                            if (strcasecmp(otel_log_record, "true") == 0) {
-                                result = otel_pack_bool(mp_pck, true);
-                            } else {
-                                result = otel_pack_bool(mp_pck, false);
-                            }
-                        }
-
-                        else if (strcasecmp(otel_value_type, "bytesvalue") == 0){
-                            result = otel_pack_string(mp_pck, otel_log_record);
-                        }
-
-                        else if (strcasecmp(otel_value_type, "mapvalue") == 0){
-                            // one key:value pair is counted as 2 tokens
-                            otel_pack_jsmn_object(mp_pck, tokens, body, token_index+kv_index+4, tokens[token_index+kv_index+4].size/2);
-                        }
-
-                        flb_free(otel_value_type);
-                        flb_free(otel_log_record);
-                    }
-
-                    flb_free(key);
-                }
-                break;
-
-            case JSMN_STRING:
-                if (strcasecmp(token_val, "traceid") == 0) {
-                    msgpack_pack_str_with_body(mp_pck, "traceid", 7);
-                    trace_id = get_value_from_token(tokens, body, token_index+1);
-                    msgpack_pack_str_with_body(mp_pck, trace_id, tokens[token_index+1].end - tokens[token_index+1].start);
-                }
-                else if (strcasecmp(token_val, "spanid") == 0) {
-                    msgpack_pack_str_with_body(mp_pck, "spanid", 6);
-                    span_id = get_value_from_token(tokens, body, token_index+1);
-                    msgpack_pack_str_with_body(mp_pck, span_id, tokens[token_index+1].end - tokens[token_index+1].start);
-                }
-
-            default:
-                break;
-        }
-    }
-
-    flb_free(trace_id);
-    flb_free(span_id);
+    parse_json_export_service_request(mp_pck, buf, buf_size);
 
     return result;
 }
