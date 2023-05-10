@@ -62,15 +62,10 @@ static int process_message(struct flb_log_event_encoder *log_encoder,
     struct flb_time t;
     int ret;
 
-    ret = flb_log_event_encoder_begin_record(&log_encoder);
+    ret = flb_log_event_encoder_begin_record(log_encoder);
 
     if (ret == FLB_EVENT_ENCODER_SUCCESS) {
-        ret = flb_log_event_encoder_set_current_timestamp(
-                &log_encoder);
-    }
-
-    if (ret == FLB_EVENT_ENCODER_SUCCESS) {
-        ret = flb_log_event_encoder_body_begin_map(log_encoder);
+        ret = flb_log_event_encoder_set_current_timestamp(log_encoder);
     }
 
     if (ret == FLB_EVENT_ENCODER_SUCCESS) {
@@ -88,13 +83,13 @@ static int process_message(struct flb_log_event_encoder *log_encoder,
 
     if (ret == FLB_EVENT_ENCODER_SUCCESS) {
         ret = flb_log_event_encoder_append_body_values(log_encoder,
-                                                       FLB_LOG_EVENT_STRING_BODY_VALUE("partition", 9),
+                                                       FLB_LOG_EVENT_CSTRING_VALUE("partition"),
                                                        FLB_LOG_EVENT_INT32_VALUE(&rkm->partition));
     }
 
     if (ret == FLB_EVENT_ENCODER_SUCCESS) {
         ret = flb_log_event_encoder_append_body_values(log_encoder,
-                                                       FLB_LOG_EVENT_STRING_BODY_VALUE("offset", 6),
+                                                       FLB_LOG_EVENT_CSTRING_VALUE("offset"),
                                                        FLB_LOG_EVENT_INT64_VALUE(&rkm->offset));
     }
 
@@ -140,7 +135,7 @@ static int process_message(struct flb_log_event_encoder *log_encoder,
     }
 
     if (ret == FLB_EVENT_ENCODER_SUCCESS) {
-        ret = flb_log_event_encoder_body_commit_map(log_encoder);
+        ret = flb_log_event_encoder_commit_record(log_encoder);
     }
 
     return ret;
@@ -160,12 +155,6 @@ static int in_kafka_collect(struct flb_input_instance *ins,
     ret = flb_log_event_encoder_init(&log_encoder,
                                      FLB_LOG_EVENT_FORMAT_DEFAULT);
 
-    if (ret != FLB_EVENT_ENCODER_SUCCESS) {
-        flb_plg_error(ins, "error initializing event encoder : %d", ret);
-
-        return -1;
-    }
-
     while (true && ret == FLB_EVENT_ENCODER_SUCCESS) {
         rd_kafka_message_t *rkm = rd_kafka_consumer_poll(ctx->kafka.rk, 1);
 
@@ -180,14 +169,6 @@ static int in_kafka_collect(struct flb_input_instance *ins,
     }
 
     if (ret == FLB_EVENT_ENCODER_SUCCESS) {
-        ret = flb_log_event_encoder_commit_record(&log_encoder);
-    }
-    else {
-        flb_plg_error(ins, "Error encoding record : %d", ret);
-        ret = -1;
-    }
-
-    if (ret == FLB_EVENT_ENCODER_SUCCESS) {
         flb_input_log_append(ins, NULL, 0,
                              log_encoder.output_buffer,
                              log_encoder.output_length);
@@ -198,8 +179,6 @@ static int in_kafka_collect(struct flb_input_instance *ins,
         flb_plg_error(ins, "Error encoding record : %d", ret);
         ret = -1;
     }
-
-    flb_log_event_encoder_destroy(&log_encoder);
 
     return ret;
 }
