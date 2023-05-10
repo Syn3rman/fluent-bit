@@ -36,7 +36,8 @@
 #include "in_kafka.h"
 #include "rdkafka.h"
 
-static int try_json(mpack_writer_t *writer, rd_kafka_message_t *rkm)
+static int try_json(struct flb_log_event_encoder *log_encoder,
+                    rd_kafka_message_t *rkm)
 {
     int root_type;
     char *buf = NULL;
@@ -50,83 +51,122 @@ static int try_json(mpack_writer_t *writer, rd_kafka_message_t *rkm)
         }
         return ret;
     }
-    mpack_write_object_bytes(writer, buf, bufsize);
+    flb_log_event_encoder_append_body_binary_body(log_encoder, buf, bufsize);
     flb_free(buf);
     return 0;
 }
 
-static void process_message(mpack_writer_t *writer,
-                            rd_kafka_message_t *rkm)
+static int process_message(struct flb_log_event_encoder *log_encoder,
+                           rd_kafka_message_t *rkm)
 {
     struct flb_time t;
+    int ret;
 
-    mpack_write_tag(writer, mpack_tag_array(2));
+    ret = flb_log_event_encoder_begin_record(&log_encoder);
 
-    flb_time_get(&t);
-    flb_time_append_to_mpack(writer, &t, 0);
-
-    mpack_write_tag(writer, mpack_tag_map(6));
-
-    mpack_write_cstr(writer, "topic");
-    if (rkm->rkt) {
-        mpack_write_cstr(writer, rd_kafka_topic_name(rkm->rkt));
-    }
-    else {
-        mpack_write_nil(writer);
+    if (ret == FLB_EVENT_ENCODER_SUCCESS) {
+        ret = flb_log_event_encoder_set_current_timestamp(
+                &log_encoder);
     }
 
-    mpack_write_cstr(writer, "partition");
-    mpack_write_i32(writer, rkm->partition);
-
-    mpack_write_cstr(writer, "offset");
-    mpack_write_i64(writer, rkm->offset);
-
-    mpack_write_cstr(writer, "error");
-    if (rkm->err) {
-        mpack_write_cstr(writer, rd_kafka_message_errstr(rkm));
-    }
-    else {
-        mpack_write_nil(writer);
+    if (ret == FLB_EVENT_ENCODER_SUCCESS) {
+        ret = flb_log_event_encoder_body_begin_map(log_encoder);
     }
 
-    mpack_write_cstr(writer, "key");
-    if (rkm->key) {
-        mpack_write_str(writer, rkm->key, rkm->key_len);
-    }
-    else {
-        mpack_write_nil(writer);
+    if (ret == FLB_EVENT_ENCODER_SUCCESS) {
+        ret = flb_log_event_encoder_append_body_cstring(log_encoder, "topic");
     }
 
-    mpack_write_cstr(writer, "payload");
-    if (rkm->payload) {
-        if (try_json(writer, rkm)) {
-            mpack_write_str(writer, rkm->payload, rkm->len);
+    if (ret == FLB_EVENT_ENCODER_SUCCESS) {
+        if (rkm->rkt) {
+            ret = flb_log_event_encoder_append_body_cstring(log_encoder, rd_kafka_topic_name(rkm->rkt));
+        }
+        else {
+            ret = flb_log_event_encoder_append_body_null(log_encoder);
         }
     }
-    else {
-        mpack_write_nil(writer);
+
+    if (ret == FLB_EVENT_ENCODER_SUCCESS) {
+        ret = flb_log_event_encoder_append_body_values(log_encoder,
+                                                       FLB_LOG_EVENT_STRING_BODY_VALUE("partition", 9),
+                                                       FLB_LOG_EVENT_INT32_VALUE(&rkm->partition));
     }
 
-    mpack_writer_flush_message(writer);
+    if (ret == FLB_EVENT_ENCODER_SUCCESS) {
+        ret = flb_log_event_encoder_append_body_values(log_encoder,
+                                                       FLB_LOG_EVENT_STRING_BODY_VALUE("offset", 6),
+                                                       FLB_LOG_EVENT_INT64_VALUE(&rkm->offset));
+    }
+
+    if (ret == FLB_EVENT_ENCODER_SUCCESS) {
+        ret = flb_log_event_encoder_append_body_cstring(log_encoder, "error");
+    }
+
+    if (ret == FLB_EVENT_ENCODER_SUCCESS) {
+        if (rkm->err) {
+            ret = flb_log_event_encoder_append_body_cstring(log_encoder, rd_kafka_message_errstr(rkm));
+        }
+        else {
+            ret = flb_log_event_encoder_append_body_null(log_encoder);
+        }
+    }
+
+    if (ret == FLB_EVENT_ENCODER_SUCCESS) {
+        ret = flb_log_event_encoder_append_body_cstring(log_encoder, "key");
+    }
+
+    if (ret == FLB_EVENT_ENCODER_SUCCESS) {
+        if (rkm->key) {
+            ret = flb_log_event_encoder_append_body_string(log_encoder, rkm->key, rkm->key_len);
+        }
+        else {
+            ret = flb_log_event_encoder_append_body_null(log_encoder);
+        }
+    }
+
+    if (ret == FLB_EVENT_ENCODER_SUCCESS) {
+        ret = flb_log_event_encoder_append_body_cstring(log_encoder, "payload");
+    }
+
+    if (ret == FLB_EVENT_ENCODER_SUCCESS) {
+        if (rkm->payload) {
+            if (try_json(log_encoder, rkm)) {
+                ret = flb_log_event_encoder_append_body_string(log_encoder, rkm->payload, rkm->len);
+            }
+        }
+        else {
+            ret = flb_log_event_encoder_append_body_null(log_encoder);
+        }
+    }
+
+    if (ret == FLB_EVENT_ENCODER_SUCCESS) {
+        ret = flb_log_event_encoder_body_commit_map(log_encoder);
+    }
+
+    return ret;
 }
 
 static int in_kafka_collect(struct flb_input_instance *ins,
                             struct flb_config *config, void *in_context)
 {
     mpack_writer_t writer;
+    struct flb_log_event_encoder log_encoder;
+    int ret;
     char *buf;
     size_t bufsize;
     size_t written = 0;
     struct flb_in_kafka_config *ctx = in_context;
 
-    mpack_writer_init_growable(&writer, &buf, &bufsize);
+    ret = flb_log_event_encoder_init(&log_encoder,
+                                     FLB_LOG_EVENT_FORMAT_DEFAULT);
 
-    if (writer.error == mpack_error_memory) {
-        flb_plg_error(ins, "Failed to allocate buffer.");
+    if (ret != FLB_EVENT_ENCODER_SUCCESS) {
+        flb_plg_error(ins, "error initializing event encoder : %d", ret);
+
         return -1;
     }
 
-    while (true) {
+    while (true && ret == FLB_EVENT_ENCODER_SUCCESS) {
         rd_kafka_message_t *rkm = rd_kafka_consumer_poll(ctx->kafka.rk, 1);
 
         if (!rkm) {
@@ -134,27 +174,34 @@ static int in_kafka_collect(struct flb_input_instance *ins,
         }
 
         flb_plg_debug(ins, "kafka message received");
-        process_message(&writer, rkm);
+        ret = process_message(&log_encoder, rkm);
         rd_kafka_message_destroy(rkm);
         rd_kafka_commit(ctx->kafka.rk, NULL, 0);
-
-        if (writer.error == mpack_error_memory) {
-            flb_plg_error(ins, "Failed to allocate buffer.");
-            return -1;
-        }
     }
 
-    written = writer.position - writer.buffer;
-
-    if (written == 0) {
-        mpack_writer_destroy(&writer);
-        return -1;
+    if (ret == FLB_EVENT_ENCODER_SUCCESS) {
+        ret = flb_log_event_encoder_commit_record(&log_encoder);
+    }
+    else {
+        flb_plg_error(ins, "Error encoding record : %d", ret);
+        ret = -1;
     }
 
-    flb_input_log_append(ins, NULL, 0, writer.buffer, written);
-    mpack_writer_destroy(&writer);
+    if (ret == FLB_EVENT_ENCODER_SUCCESS) {
+        flb_input_log_append(ins, NULL, 0,
+                             log_encoder.output_buffer,
+                             log_encoder.output_length);
 
-    return 0;
+        ret = 0;
+    }
+    else {
+        flb_plg_error(ins, "Error encoding record : %d", ret);
+        ret = -1;
+    }
+
+    flb_log_event_encoder_destroy(&log_encoder);
+
+    return ret;
 }
 
 /* Initialize plugin */
