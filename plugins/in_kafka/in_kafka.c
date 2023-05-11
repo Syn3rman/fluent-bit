@@ -62,7 +62,6 @@ static int process_message(struct flb_log_event_encoder *log_encoder,
     struct flb_time t;
     int ret;
 
-    flb_log_event_encoder_reset(log_encoder);
     ret = flb_log_event_encoder_begin_record(log_encoder);
 
     if (ret == FLB_EVENT_ENCODER_SUCCESS) {
@@ -153,11 +152,10 @@ static int in_kafka_collect(struct flb_input_instance *ins,
     int ret;
     char *buf;
     size_t bufsize;
-    struct flb_log_event_encoder log_encoder;
     struct flb_in_kafka_config *ctx = in_context;
     rd_kafka_message_t *rkm;
 
-    ret = flb_log_event_encoder_init(&log_encoder,
+    ret = flb_log_event_encoder_init(ctx->log_encoder,
                                      FLB_LOG_EVENT_FORMAT_DEFAULT);;
 
     while (ret == FLB_EVENT_ENCODER_SUCCESS) {
@@ -168,25 +166,23 @@ static int in_kafka_collect(struct flb_input_instance *ins,
         }
 
         flb_plg_debug(ins, "kafka message received");
-        ret = process_message(&log_encoder, rkm);
+        ret = process_message(ctx->log_encoder, rkm);
         rd_kafka_message_destroy(rkm);
         rd_kafka_commit(ctx->kafka.rk, NULL, 0);
     }
 
     if (ret == FLB_EVENT_ENCODER_SUCCESS) {
-        // flb_input_log_append(ins, NULL, 0,
-        //                      ctx->log_encoder->output_buffer,
-        //                      ctx->log_encoder->output_length);
         flb_input_log_append(ins, NULL, 0,
-                             log_encoder.output_buffer,
-                             log_encoder.output_length);
-
+                             ctx->log_encoder->output_buffer,
+                             ctx->log_encoder->output_length);
         ret = 0;
     }
     else {
         flb_plg_error(ins, "Error encoding record : %d", ret);
         ret = -1;
     }
+
+    flb_log_event_encoder_reset(ctx->log_encoder);
 
     return ret;
 }
@@ -270,12 +266,11 @@ static int in_kafka_init(struct flb_input_instance *ins,
 
     ctx->log_encoder = flb_log_event_encoder_create(FLB_LOG_EVENT_FORMAT_DEFAULT);
 
-    ret = flb_log_event_encoder_init(ctx->log_encoder,
-                                     FLB_LOG_EVENT_FORMAT_DEFAULT);
+    if (ctx->log_encoder == NULL) {
+        flb_plg_error(ins, "could not initialize log encoder");
+        flb_log_event_encoder_destroy(ctx->log_encoder);
 
-    if (ret != FLB_EVENT_ENCODER_SUCCESS) {
-        flb_plg_error(ctx->ins, "could not initialize log encoder");
-        goto init_error;
+        return -1;
     }
 
     return 0;
@@ -308,8 +303,13 @@ static int in_kafka_exit(void *in_context, struct flb_config *config)
     ctx = in_context;
     rd_kafka_destroy(ctx->kafka.rk);
     flb_free(ctx->kafka.brokers);
+
+    if (ctx->log_encoder){
+        flb_log_event_encoder_destroy(ctx->log_encoder);
+        // flb_free(ctx->log_encoder);
+    }
+
     flb_free(ctx);
-    flb_log_event_encoder_destroy(ctx->log_encoder);
 
     return 0;
 }
