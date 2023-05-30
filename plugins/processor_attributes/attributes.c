@@ -317,63 +317,6 @@ static int cb_exit(struct flb_processor_instance *processor_instance)
     return FLB_PROCESSOR_SUCCESS;
 }
 
-static int cfl_kvlist_contains(struct cfl_kvlist *kvlist,
-                               char *name)
-{
-    struct cfl_list   *iterator;
-    struct cfl_kvpair *pair;
-
-    cfl_list_foreach(iterator, &kvlist->list) {
-        pair = cfl_list_entry(iterator,
-                              struct cfl_kvpair, _head);
-
-        if (strcasecmp(pair->key, name) == 0) {
-            return FLB_TRUE;
-        }
-    }
-
-    return FLB_FALSE;
-}
-
-static void cfl_kvpair_destroy(struct cfl_kvpair *pair)
-{
-    if (pair != NULL) {
-        if (!cfl_list_entry_is_orphan(&pair->_head)) {
-            cfl_list_del(&pair->_head);
-        }
-
-        if (pair->key != NULL) {
-            cfl_sds_destroy(pair->key);
-        }
-
-        if (pair->val != NULL) {
-            cfl_variant_destroy(pair->val);
-        }
-
-        free(pair);
-    }
-}
-
-static int cfl_kvlist_remove(struct cfl_kvlist *kvlist,
-                             char *name)
-{
-    struct cfl_list   *iterator_backup;
-    struct cfl_list   *iterator;
-    struct cfl_kvpair *pair;
-
-    cfl_list_foreach_safe(iterator, iterator_backup, &kvlist->list) {
-        pair = cfl_list_entry(iterator,
-                              struct cfl_kvpair, _head);
-
-        if (strcasecmp(pair->key, name) == 0) {
-            cfl_kvpair_destroy(pair);
-        }
-    }
-
-    return FLB_TRUE;
-}
-
-
 /* local declarations */
 
 
@@ -682,14 +625,14 @@ static int span_contains_attribute(struct ctrace_span *span,
     return cfl_kvlist_contains(span->attr->kv, name);
 }
 
-static int span_remove_attribute(struct ctrace_span *span,
+static void span_remove_attribute(struct ctrace_span *span,
                                  char *name)
 {
     if (span->attr == NULL) {
         return FLB_FALSE;
     }
 
-    return cfl_kvlist_remove(span->attr->kv, name);
+    cfl_kvlist_remove(span->attr->kv, name);
 }
 
 static int span_update_attribute(struct ctrace_span *span,
@@ -797,12 +740,7 @@ static int span_convert_attribute(struct ctrace_span *span,
         return FLB_FALSE;
     }
 
-    result = cfl_kvlist_remove(span->attr->kv, name);
-
-    if (result != FLB_TRUE) {
-        return FLB_FALSE;
-    }
-
+    cfl_kvlist_remove(span->attr->kv, name);
 
     result = cfl_kvlist_insert(span->attr->kv, name, converted_attribute);
 
@@ -1014,9 +952,7 @@ static int traces_context_remove_attribute(struct ctrace *traces_context,
                               struct ctrace_span, _head_global);
 
         if (span_contains_attribute(span, name) == FLB_TRUE) {
-            if (span_remove_attribute(span, name) != FLB_TRUE) {
-                return FLB_FALSE;
-            }
+            span_remove_attribute(span, name);
         }
     }
 
