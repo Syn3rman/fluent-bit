@@ -37,4 +37,14 @@ void cmt_labels_destroy(struct cmt_labels *labels);
 int cmt_labels_add_kv(struct cmt_labels *labels, char *key, char *val);
 int cmt_labels_count(struct cmt_labels *labels);
 
+int cmt_contains_static_label(struct cmt *metrics_context,
+                              char *label_name);
+int cmt_update_static_label(struct cmt *metrics_context,
+                            char *label_name,
+                            char *label_value);
+int cmt_remove_static_label(struct cmt *metrics_context,
+                            char *label_name);
+
+void cmt_label_destroy(struct cmt_label *label);
+
 #endif

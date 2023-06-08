@@ -45,6 +45,10 @@ struct cmt_metric {
     struct cfl_list _head;
 };
 
+struct cmt_metric *cmt_map_metric_create(uint64_t hash,
+                                         int labels_count, char **labels_val);
+void cmt_map_metric_destroy(struct cmt_metric *metric);
+
 void cmt_metric_set(struct cmt_metric *metric, uint64_t timestamp, double val);
 void cmt_metric_inc(struct cmt_metric *metric, uint64_t timestamp);
 void cmt_metric_dec(struct cmt_metric *metric, uint64_t timestamp);

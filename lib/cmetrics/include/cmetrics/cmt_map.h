@@ -49,6 +49,13 @@ struct cmt_map *cmt_map_create(int type, struct cmt_opts *opts,
                                int count, char **labels, void *parent);
 void cmt_map_destroy(struct cmt_map *map);
 
+struct cmt_metric *cmt_map_metric_create(uint64_t hash,
+                                         int labels_count, char **labels_val);
+
+struct cmt_map_label *cmt_map_label_create(char *name);
+ssize_t cmt_map_get_label_index(struct cmt_map *map, char *label_name);
+void cmt_map_label_destroy(struct cmt_map_label *label);
+
 struct cmt_metric *cmt_map_metric_get(struct cmt_opts *opts, struct cmt_map *map,
                                       int labels_count, char **labels_val,
                                       int write_op);

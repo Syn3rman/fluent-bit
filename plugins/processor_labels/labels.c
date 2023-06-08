@@ -61,135 +61,6 @@ struct internal_processor_context {
     struct flb_config *config;
 };
 
-
-/*
- * CMETRICS
- */
-
-static void cmt_label_destroy(struct cmt_label *label)
-{
-    if (label != NULL) {
-        if (!cfl_list_entry_is_orphan(&label->_head)) {
-            cfl_list_del(&label->_head);
-        }
-
-        if (label->key != NULL) {
-            cfl_sds_destroy(label->key);
-        }
-
-        if (label->val != NULL) {
-            cfl_sds_destroy(label->val);
-        }
-
-        free(label);
-    }
-}
-
-/* we can't use flb_* memory functions here because this will
- * be released by cmetrics using the standard allocator.
- */
-
-static struct cmt_map_label *cmt_map_label_create(char *name)
-{
-    struct cmt_map_label *label;
-
-    label = calloc(1, sizeof(struct cmt_map_label));
-
-    if (label != NULL) {
-        label->name = cfl_sds_create(name);
-
-        if (label->name == NULL) {
-            free(label);
-
-            label = NULL;
-        }
-
-    }
-
-    return label;
-}
-
-static void cmt_map_label_destroy(struct cmt_map_label *label)
-{
-    if (label != NULL) {
-        if (!cfl_list_entry_is_orphan(&label->_head)) {
-            cfl_list_del(&label->_head);
-        }
-
-        if (label->name != NULL) {
-            cfl_sds_destroy(label->name);
-        }
-
-        free(label);
-    }
-}
-
-static struct cmt_metric *map_metric_create(uint64_t hash,
-                                            int labels_count, char **labels_val)
-{
-    int i;
-    char *name;
-    struct cmt_metric *metric;
-    struct cmt_map_label *label;
-
-    metric = calloc(1, sizeof(struct cmt_metric));
-    if (!metric) {
-        cmt_errno();
-        return NULL;
-    }
-    cfl_list_init(&metric->labels);
-    metric->val = 0.0;
-    metric->hash = hash;
-
-    for (i = 0; i < labels_count; i++) {
-        label = malloc(sizeof(struct cmt_map_label));
-        if (!label) {
-            cmt_errno();
-            goto error;
-        }
-
-        name = labels_val[i];
-        label->name = cfl_sds_create(name);
-        if (!label->name) {
-            cmt_errno();
-            free(label);
-            goto error;
-        }
-        cfl_list_add(&label->_head, &metric->labels);
-    }
-
-    return metric;
-
- error:
-    free(metric);
-    return NULL;
-}
-
-static void map_metric_destroy(struct cmt_metric *metric)
-{
-    struct cfl_list *tmp;
-    struct cfl_list *head;
-    struct cmt_map_label *label;
-
-    cfl_list_foreach_safe(head, tmp, &metric->labels) {
-        label = cfl_list_entry(head, struct cmt_map_label, _head);
-        cfl_sds_destroy(label->name);
-        cfl_list_del(&label->_head);
-        free(label);
-    }
-
-    if (metric->hist_buckets) {
-        free(metric->hist_buckets);
-    }
-    if (metric->sum_quantiles) {
-        free(metric->sum_quantiles);
-    }
-
-    cfl_list_del(&metric->_head);
-    free(metric);
-}
-
-
 /*
  * LOCAL
  */
@@ -415,24 +286,6 @@ static int cb_exit(struct flb_processor_instance *processor_instance)
     return FLB_PROCESSOR_SUCCESS;
 }
 
-static int metrics_context_contains_static_label(struct cmt *metrics_context,
-                                                 char *label_name)
-{
-    struct cfl_list  *label_iterator;
-    struct cmt_label *label;
-
-    cfl_list_foreach(label_iterator, &metrics_context->static_labels->list) {
-        label = cfl_list_entry(label_iterator,
-                               struct cmt_label, _head);
-
-        if (strcasecmp(label_name, label->key) == 0) {
-            return FLB_TRUE;
-        }
-    }
-
-    return FLB_FALSE;
-}
-
 static int metrics_context_insert_static_label(struct cmt *metrics_context,
                                                char *label_name,
                                                char *label_value)
@@ -442,36 +295,6 @@ static int metrics_context_insert_static_label(struct cmt *metrics_context,
     }
 
     return FLB_TRUE;
-}
-
-static int metrics_context_update_static_label(struct cmt *metrics_context,
-                                               char *label_name,
-                                               char *label_value)
-{
-    struct cfl_list  *iterator;
-    cfl_sds_t         result;
-    struct cmt_label *label;
-
-    cfl_list_foreach(iterator, &metrics_context->static_labels->list) {
-        label = cfl_list_entry(iterator,
-                               struct cmt_label, _head);
-
-        if (strcasecmp(label_name, label->key) == 0) {
-            cfl_sds_set_len(label->val, 0);
-
-            result = cfl_sds_cat(label->val, label_value, strlen(label_value));
-
-            if (result == NULL) {
-                return FLB_FALSE;
-            }
-
-            label->val = result;
-
-            return FLB_TRUE;
-        }
-    }
-
-    return FLB_FALSE;
 }
 
 static int metrics_context_transform_static_label(struct cmt *metrics_context,
@@ -513,47 +336,6 @@ static int metrics_context_upsert_static_label(struct cmt *metrics_context,
                                                label_value);
 }
 
-static int metrics_context_remove_static_label(struct cmt *metrics_context,
-                                               char *label_name)
-{
-    struct cfl_list  *iterator;
-    struct cmt_label *label;
-
-    cfl_list_foreach(iterator,
-                     &metrics_context->static_labels->list) {
-        label = cfl_list_entry(iterator, struct cmt_label, _head);
-
-        if (strcasecmp(label_name, label->key) == 0) {
-            cmt_label_destroy(label);
-
-            return FLB_TRUE;
-        }
-    }
-
-    return FLB_FALSE;
-}
-
-static ssize_t metrics_map_get_label_index(struct cmt_map *map, char *label_name)
-{
-    struct cfl_list      *iterator;
-    struct cmt_map_label *label;
-    ssize_t               index;
-
-    index = 0;
-
-    cfl_list_foreach(iterator, &map->label_keys) {
-        label = cfl_list_entry(iterator, struct cmt_map_label, _head);
-
-        if (strcasecmp(label_name, label->name) == 0) {
-            return index;
-        }
-
-        index++;
-    }
-
-    return -1;
-}
-
 static ssize_t metrics_map_insert_label_name(struct cmt_map *map, char *label_name)
 {
     struct cmt_map_label *label;
@@ -579,7 +361,7 @@ static int metrics_map_contains_label(struct cmt_map *map, char *label_name)
 {
     ssize_t result;
 
-    result = metrics_map_get_label_index(map, label_name);
+    result = cmt_map_get_label_index(map, label_name);
 
     if (result != -1) {
         return FLB_TRUE;
@@ -917,7 +699,7 @@ int metrics_map_update_label(struct cmt_map *map,
     ssize_t label_index;
     int     result;
 
-    label_index = metrics_map_get_label_index(map, label_name);
+    label_index = cmt_map_get_label_index(map, label_name);
 
     if (label_index == -1) {
         return FLB_TRUE;
@@ -943,7 +725,7 @@ int metrics_map_transform_label(struct cmt_map *map,
     ssize_t label_index;
     int     result;
 
-    label_index = metrics_map_get_label_index(map, label_name);
+    label_index = cmt_map_get_label_index(map, label_name);
 
     if (label_index == -1) {
         return FLB_TRUE;
@@ -969,7 +751,7 @@ int metrics_map_insert_label(struct cmt_map *map,
     int     result;
 
     label_added = FLB_FALSE;
-    label_index = metrics_map_get_label_index(map, label_name);
+    label_index = cmt_map_get_label_index(map, label_name);
 
     if (label_index == -1) {
         label_index = metrics_map_insert_label_name(map, label_name);
@@ -1002,7 +784,7 @@ int metrics_map_upsert_label(struct cmt_map *map,
     int     result;
 
     label_added = FLB_FALSE;
-    label_index = metrics_map_get_label_index(map, label_name);
+    label_index = cmt_map_get_label_index(map, label_name);
 
     if (label_index == -1) {
         label_index = metrics_map_insert_label_name(map, label_name);
@@ -1032,7 +814,7 @@ int metrics_map_remove_label(struct cmt_map *map,
     ssize_t label_index;
     int     result;
 
-    label_index = metrics_map_get_label_index(map, label_name);
+    label_index = cmt_map_get_label_index(map, label_name);
 
     if (label_index == -1) {
         return FLB_TRUE;

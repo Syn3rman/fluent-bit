@@ -18,6 +18,7 @@
  */
 
 #include <cmetrics/cmetrics.h>
+#include <cmetrics/cmt_map.h>
 #include <cmetrics/cmt_metric.h>
 #include <cmetrics/cmt_math.h>
 #include <cmetrics/cmt_atomic.h>
@@ -66,6 +67,71 @@ void cmt_metric_set(struct cmt_metric *metric, uint64_t timestamp, double val)
 
     cmt_atomic_store(&metric->val, tmp);
     cmt_atomic_store(&metric->timestamp, timestamp);
+}
+
+struct cmt_metric *cmt_map_metric_create(uint64_t hash,
+                                         int labels_count, char **labels_val)
+{
+    int i;
+    char *name;
+    struct cmt_metric *metric;
+    struct cmt_map_label *label;
+
+    metric = calloc(1, sizeof(struct cmt_metric));
+    if (!metric) {
+        cmt_errno();
+        return NULL;
+    }
+    cfl_list_init(&metric->labels);
+    metric->val = 0.0;
+    metric->hash = hash;
+
+    for (i = 0; i < labels_count; i++) {
+        label = malloc(sizeof(struct cmt_map_label));
+        if (!label) {
+            cmt_errno();
+            goto error;
+        }
+
+        name = labels_val[i];
+        label->name = cfl_sds_create(name);
+        if (!label->name) {
+            cmt_errno();
+            free(label);
+            goto error;
+        }
+        cfl_list_add(&label->_head, &metric->labels);
+    }
+
+    return metric;
+
+ error:
+    free(metric);
+    return NULL;
+}
+
+void cmt_map_metric_destroy(struct cmt_metric *metric)
+{
+    struct cfl_list *tmp;
+    struct cfl_list *head;
+    struct cmt_map_label *label;
+
+    cfl_list_foreach_safe(head, tmp, &metric->labels) {
+        label = cfl_list_entry(head, struct cmt_map_label, _head);
+        cfl_sds_destroy(label->name);
+        cfl_list_del(&label->_head);
+        free(label);
+    }
+
+    if (metric->hist_buckets) {
+        free(metric->hist_buckets);
+    }
+    if (metric->sum_quantiles) {
+        free(metric->sum_quantiles);
+    }
+
+    cfl_list_del(&metric->_head);
+    free(metric);
 }
 
 static inline int metric_hist_exchange(struct cmt_metric *metric,

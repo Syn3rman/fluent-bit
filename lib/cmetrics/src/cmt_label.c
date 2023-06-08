@@ -98,3 +98,90 @@ int cmt_labels_count(struct cmt_labels *labels)
 
     return c;
 }
+
+int cmt_contains_static_label(struct cmt *metrics_context,
+                              char *label_name)
+{
+    struct cfl_list  *label_iterator;
+    struct cmt_label *label;
+
+    cfl_list_foreach(label_iterator, &metrics_context->static_labels->list) {
+        label = cfl_list_entry(label_iterator,
+                               struct cmt_label, _head);
+
+        if (strcasecmp(label_name, label->key) == 0) {
+            return CMT_TRUE;
+        }
+    }
+
+    return CMT_FALSE;
+}
+
+int cmt_update_static_label(struct cmt *metrics_context,
+                            char *label_name,
+                            char *label_value)
+{
+    struct cfl_list  *iterator;
+    cfl_sds_t         result;
+    struct cmt_label *label;
+
+    cfl_list_foreach(iterator, &metrics_context->static_labels->list) {
+        label = cfl_list_entry(iterator,
+                               struct cmt_label, _head);
+
+        if (strcasecmp(label_name, label->key) == 0) {
+            cfl_sds_set_len(label->val, 0);
+
+            result = cfl_sds_cat(label->val, label_value, strlen(label_value));
+
+            if (result == NULL) {
+                return CMT_FALSE;
+            }
+
+            label->val = result;
+
+            return CMT_TRUE;
+        }
+    }
+
+    return CMT_FALSE;
+}
+
+int cmt_remove_static_label(struct cmt *metrics_context,
+                            char *label_name)
+{
+    struct cfl_list  *iterator;
+    struct cmt_label *label;
+
+    cfl_list_foreach(iterator,
+                     &metrics_context->static_labels->list) {
+        label = cfl_list_entry(iterator, struct cmt_label, _head);
+
+        if (strcasecmp(label_name, label->key) == 0) {
+            cmt_label_destroy(label);
+
+            return FLB_TRUE;
+        }
+    }
+
+    return FLB_FALSE;
+}
+
+void cmt_label_destroy(struct cmt_label *label)
+{
+    if (label != NULL) {
+        if (!cfl_list_entry_is_orphan(&label->_head)) {
+            cfl_list_del(&label->_head);
+        }
+
+        if (label->key != NULL) {
+            cfl_sds_destroy(label->key);
+        }
+
+        if (label->val != NULL) {
+            cfl_sds_destroy(label->val);
+        }
+
+        free(label);
+    }
+}

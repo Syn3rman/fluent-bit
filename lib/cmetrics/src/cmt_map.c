@@ -76,6 +76,41 @@ struct cmt_map *cmt_map_create(int type, struct cmt_opts *opts, int count, char 
     return NULL;
 }
 
+struct cmt_map_label *cmt_map_label_create(char *name)
+{
+    struct cmt_map_label *label;
+
+    label = calloc(1, sizeof(struct cmt_map_label));
+
+    if (label != NULL) {
+        label->name = cfl_sds_create(name);
+
+        if (label->name == NULL) {
+            free(label);
+
+            label = NULL;
+        }
+
+    }
+
+    return label;
+}
+
+void cmt_map_label_destroy(struct cmt_map_label *label)
+{
+    if (label != NULL) {
+        if (!cfl_list_entry_is_orphan(&label->_head)) {
+            cfl_list_del(&label->_head);
+        }
+
+        if (label->name != NULL) {
+            cfl_sds_destroy(label->name);
+        }
+
+        free(label);
+    }
+}
+
 static struct cmt_metric *metric_hash_lookup(struct cmt_map *map, uint64_t hash)
 {
     struct cfl_list *head;
@@ -95,8 +130,8 @@ static struct cmt_metric *metric_hash_lookup(struct cmt_map *map, uint64_t hash)
     return NULL;
 }
 
-static struct cmt_metric *map_metric_create(uint64_t hash,
-                                            int labels_count, char **labels_val)
+struct cmt_metric *cmt_map_metric_create(uint64_t hash,
+                                         int labels_count, char **labels_val)
 {
     int i;
     char *name;
@@ -136,7 +171,7 @@ static struct cmt_metric *map_metric_create(uint64_t hash,
     return NULL;
 }
 
-static void map_metric_destroy(struct cmt_metric *metric)
+static void cmt_map_metric_destroy(struct cmt_metric *metric)
 {
     struct cfl_list *tmp;
     struct cfl_list *head;
@@ -159,6 +194,28 @@ static void map_metric_destroy(struct cmt_metric *metric)
     cfl_list_del(&metric->_head);
     free(metric);
 }
+
+ssize_t cmt_map_get_label_index(struct cmt_map *map, char *label_name)
+{
+    struct cfl_list      *iterator;
+    struct cmt_map_label *label;
+    ssize_t               index;
+
+    index = 0;
+
+    cfl_list_foreach(iterator, &map->label_keys) {
+        label = cfl_list_entry(iterator, struct cmt_map_label, _head);
+
+        if (strcasecmp(label_name, label->name) == 0) {
+            return index;
+        }
+
+        index++;
+    }
+
+    return -1;
+}
+
 
 struct cmt_metric *cmt_map_metric_get(struct cmt_opts *opts, struct cmt_map *map,
                                       int labels_count, char **labels_val,
