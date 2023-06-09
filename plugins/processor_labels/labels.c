@@ -41,8 +41,6 @@
 
 #define PROMOTE_STATIC_METRICS_ON_LABEL_INSERT
 
-typedef int (*label_transformer)(struct cmt_metric *, cfl_sds_t *value);
-
 struct internal_processor_context {
     struct mk_list *update_list;
     struct mk_list *insert_list;
@@ -297,960 +295,24 @@ static int metrics_context_insert_static_label(struct cmt *metrics_context,
     return FLB_TRUE;
 }
 
-static int metrics_context_transform_static_label(struct cmt *metrics_context,
-                                                  char *label_name,
-                                                  label_transformer transformer)
-{
-    struct cfl_list  *iterator;
-    struct cmt_label *label;
-
-    cfl_list_foreach(iterator, &metrics_context->static_labels->list) {
-        label = cfl_list_entry(iterator,
-                               struct cmt_label, _head);
-
-        if (strcasecmp(label_name, label->key) == 0) {
-            return transformer(NULL, &label->val);
-        }
-    }
-
-    return FLB_FALSE;
-}
-
 static int metrics_context_upsert_static_label(struct cmt *metrics_context,
                                                char *label_name,
                                                char *label_value)
 {
     int result;
 
-    result = metrics_context_contains_static_label(metrics_context,
-                                                   label_name);
+    result = cmt_contains_static_label(metrics_context,
+                                       label_name);
 
     if (result == FLB_TRUE) {
-        return metrics_context_update_static_label(metrics_context,
-                                                   label_name,
-                                                   label_value);
+        return cmt_update_static_label(metrics_context,
+                                       label_name,
+                                       label_value);
     }
 
     return metrics_context_insert_static_label(metrics_context,
                                                label_name,
                                                label_value);
-}
-
-static ssize_t metrics_map_insert_label_name(struct cmt_map *map, char *label_name)
-{
-    struct cmt_map_label *label;
-    ssize_t               index;
-
-    label = cmt_map_label_create(label_name);
-
-    if (label == NULL) {
-        return -1;
-    }
-
-    map->label_count++;
-
-    cfl_list_add(&label->_head, &map->label_keys);
-
-    index = (ssize_t) cfl_list_size(&map->label_keys);
-    index--;
-
-    return index;
-}
-
-static int metrics_map_contains_label(struct cmt_map *map, char *label_name)
-{
-    ssize_t result;
-
-    result = cmt_map_get_label_index(map, label_name);
-
-    if (result != -1) {
-        return FLB_TRUE;
-    }
-
-    return FLB_FALSE;
-}
-
-static int metrics_map_remove_label_name(struct cmt_map *map,
-                                         size_t label_index)
-{
-    struct cfl_list      *iterator;
-    struct cmt_map_label *label;
-    size_t                index;
-
-    index = 0;
-
-    cfl_list_foreach(iterator, &map->label_keys) {
-        label = cfl_list_entry(iterator, struct cmt_map_label, _head);
-
-        if (label_index == index) {
-            cmt_map_label_destroy(label);
-
-            return FLB_TRUE;
-        }
-
-        index++;
-    }
-
-    return FLB_FALSE;
-}
-
-int metrics_data_point_remove_label_value(struct cmt_metric *metric,
-                                          size_t label_index)
-{
-    struct cfl_list      *iterator;
-    struct cmt_map_label *label;
-    size_t                index;
-
-    index = 0;
-
-    cfl_list_foreach(iterator, &metric->labels) {
-        label = cfl_list_entry(iterator, struct cmt_map_label, _head);
-
-        if (label_index == index) {
-            cmt_map_label_destroy(label);
-
-            return FLB_TRUE;
-        }
-
-        index++;
-    }
-
-    return FLB_FALSE;
-}
-
-int metrics_data_point_transform_label_value(struct cmt_metric *metric,
-                                             size_t label_index,
-                                             label_transformer transformer)
-{
-    struct cfl_list      *iterator;
-    struct cmt_map_label *label;
-    size_t                index;
-
-    index = 0;
-
-    cfl_list_foreach(iterator, &metric->labels) {
-        label = cfl_list_entry(iterator, struct cmt_map_label, _head);
-
-        if (label_index == index) {
-            return transformer(metric, &label->name);
-        }
-
-        index++;
-    }
-
-    return FLB_FALSE;
-}
-
-int metrics_data_point_set_label_value(struct cmt_metric *metric,
-                                       size_t label_index,
-                                       char *label_value,
-                                       int overwrite,
-                                       int insert)
-{
-    struct cmt_map_label *new_label;
-    struct cfl_list      *iterator;
-    cfl_sds_t             result;
-    size_t                index;
-    struct cmt_map_label *label;
-
-    label = NULL;
-    index = 0;
-
-    cfl_list_foreach(iterator, &metric->labels) {
-        label = cfl_list_entry(iterator, struct cmt_map_label, _head);
-
-        if (label_index == index) {
-            break;
-        }
-
-        index++;
-    }
-
-    if (label_index != index) {
-        return FLB_FALSE;
-    }
-
-    if (insert == FLB_TRUE) {
-        new_label = cmt_map_label_create(label_value);
-
-        if (new_label == NULL) {
-            return FLB_FALSE;
-        }
-
-        if (label != NULL) {
-            cfl_list_add_after(&new_label->_head,
-                               &label->_head,
-                               &metric->labels);
-        }
-        else {
-            cfl_list_append(&new_label->_head,
-                            &metric->labels);
-        }
-    }
-    else {
-        if (label == NULL) {
-            return FLB_FALSE;
-        }
-
-        if (label->name == NULL) {
-            label->name = cfl_sds_create(label_value);
-
-            if (label->name == NULL) {
-                return FLB_FALSE;
-            }
-        }
-        else {
-            if (overwrite == FLB_TRUE ||
-                cfl_sds_len(label->name) == 0) {
-                cfl_sds_set_len(label->name, 0);
-
-                result = cfl_sds_cat(label->name,
-                                     label_value,
-                                     strlen(label_value));
-
-                if (result == NULL) {
-                    return FLB_FALSE;
-                }
-
-                label->name = result;
-            }
-        }
-    }
-
-    return FLB_TRUE;
-}
-
-
-int metrics_map_convert_static_metric(struct cmt_map *map,
-                                      size_t label_index,
-                                      char *label_value)
-{
-    struct cmt_metric *metric;
-    int                result;
-    size_t             index;
-    cfl_hash_state_t   state;
-    uint64_t           hash;
-
-    cfl_hash_64bits_reset(&state);
-
-    cfl_hash_64bits_update(&state,
-                           map->opts->fqname,
-                           cfl_sds_len(map->opts->fqname));
-
-    for (index = 0 ; index < map->label_count ; index++) {
-        if (index != label_index) {
-            cfl_hash_64bits_update(&state,
-                                   "_NULL_",
-                                   6);
-        }
-        else {
-            cfl_hash_64bits_update(&state,
-                                   label_value,
-                                   strlen(label_value));
-        }
-    }
-
-    hash = cfl_hash_64bits_digest(&state);
-
-    metric = map_metric_create(hash, 0, NULL);
-
-    if (metric == NULL) {
-        return FLB_FALSE;
-    }
-
-    for (index = 0 ; index < map->label_count ; index++) {
-        if (index != label_index) {
-            result = metrics_data_point_set_label_value(metric,
-                                                        index,
-                                                        "",
-                                                        FLB_TRUE,
-                                                        FLB_TRUE);
-        }
-        else {
-            result = metrics_data_point_set_label_value(metric,
-                                                        index,
-                                                        label_value,
-                                                        FLB_TRUE,
-                                                        FLB_TRUE);
-        }
-
-        if (result != FLB_TRUE) {
-            map_metric_destroy(metric);
-
-            return FLB_FALSE;
-        }
-    }
-
-    metric->val = map->metric.val;
-
-    metric->hist_buckets = map->metric.hist_buckets;
-    metric->hist_count = map->metric.hist_count;
-    metric->hist_sum = map->metric.hist_sum;
-
-    metric->sum_quantiles_set = map->metric.sum_quantiles_set;
-    metric->sum_quantiles = map->metric.sum_quantiles;
-    metric->sum_quantiles_count = map->metric.sum_quantiles_count;
-    metric->sum_count = map->metric.sum_count;
-    metric->sum_sum = map->metric.sum_sum;
-
-    metric->timestamp = map->metric.timestamp;
-
-    map->metric_static_set = 0;
-
-    cfl_list_add(&metric->_head, &map->metrics);
-
-    memset(&map->metric, 0, sizeof(struct cmt_metric));
-
-    return FLB_TRUE;
-}
-
-int metrics_map_remove_label_value(struct cmt_map *map,
-                                   size_t label_index)
-{
-    struct cfl_list   *iterator;
-    struct cmt_metric *metric;
-    int                result;
-
-    result = FLB_TRUE;
-
-    cfl_list_foreach(iterator, &map->metrics) {
-        metric = cfl_list_entry(iterator, struct cmt_metric, _head);
-
-        result = metrics_data_point_remove_label_value(metric, label_index);
-
-        if (result == FLB_FALSE) {
-            break;
-        }
-    }
-
-    return result;
-}
-
-int metrics_map_set_label_value(struct cmt_map *map,
-                                size_t label_index,
-                                char *label_value,
-                                int overwrite,
-                                int insert)
-{
-    struct cfl_list   *iterator;
-    struct cmt_metric *metric;
-    int                result;
-
-    result = FLB_TRUE;
-
-    cfl_list_foreach(iterator, &map->metrics) {
-        metric = cfl_list_entry(iterator, struct cmt_metric, _head);
-
-        result = metrics_data_point_set_label_value(metric,
-                                                    label_index,
-                                                    label_value,
-                                                    overwrite,
-                                                    insert);
-
-        if (result == FLB_FALSE) {
-            break;
-        }
-    }
-
-#ifdef PROMOTE_STATIC_METRICS_ON_LABEL_INSERT
-    if (map->metric_static_set == 1) {
-        result = metrics_map_convert_static_metric(map,
-                                                   label_index,
-                                                   label_value);
-
-        if(result == FLB_FALSE) {
-            return FLB_FALSE;
-        }
-    }
-#endif
-
-    return result;
-}
-
-int metrics_map_transform_label_value(struct cmt_map *map,
-                                      size_t label_index,
-                                      label_transformer transformer)
-{
-    struct cfl_list   *iterator;
-    struct cmt_metric *metric;
-    int                result;
-
-    result = FLB_TRUE;
-
-    cfl_list_foreach(iterator, &map->metrics) {
-        metric = cfl_list_entry(iterator, struct cmt_metric, _head);
-
-        result = metrics_data_point_transform_label_value(metric,
-                                                          label_index,
-                                                          transformer);
-
-        if (result == FLB_FALSE) {
-            break;
-        }
-    }
-
-    return result;
-}
-
-int metrics_map_update_label(struct cmt_map *map,
-                             char *label_name,
-                             char *label_value)
-{
-    ssize_t label_index;
-    int     result;
-
-    label_index = cmt_map_get_label_index(map, label_name);
-
-    if (label_index == -1) {
-        return FLB_TRUE;
-    }
-
-    result = metrics_map_set_label_value(map,
-                                         label_index,
-                                         label_value,
-                                         FLB_TRUE,
-                                         FLB_FALSE);
-
-    if(result == FLB_FALSE) {
-        return FLB_FALSE;
-    }
-
-    return FLB_TRUE;
-}
-
-int metrics_map_transform_label(struct cmt_map *map,
-                                char *label_name,
-                                label_transformer transformer)
-{
-    ssize_t label_index;
-    int     result;
-
-    label_index = cmt_map_get_label_index(map, label_name);
-
-    if (label_index == -1) {
-        return FLB_TRUE;
-    }
-
-    result = metrics_map_transform_label_value(map,
-                                               label_index,
-                                               transformer);
-
-    if(result == FLB_FALSE) {
-        return FLB_FALSE;
-    }
-
-    return FLB_TRUE;
-}
-
-int metrics_map_insert_label(struct cmt_map *map,
-                             char *label_name,
-                             char *label_value)
-{
-    ssize_t label_index;
-    int     label_added;
-    int     result;
-
-    label_added = FLB_FALSE;
-    label_index = cmt_map_get_label_index(map, label_name);
-
-    if (label_index == -1) {
-        label_index = metrics_map_insert_label_name(map, label_name);
-        label_added = FLB_TRUE;
-    }
-
-    if (label_index == -1) {
-        return FLB_FALSE;
-    }
-
-    result = metrics_map_set_label_value(map,
-                                         label_index,
-                                         label_value,
-                                         FLB_FALSE,
-                                         label_added);
-
-    if(result == FLB_FALSE) {
-        return FLB_FALSE;
-    }
-
-    return FLB_TRUE;
-}
-
-int metrics_map_upsert_label(struct cmt_map *map,
-                             char *label_name,
-                             char *label_value)
-{
-    ssize_t label_index;
-    int     label_added;
-    int     result;
-
-    label_added = FLB_FALSE;
-    label_index = cmt_map_get_label_index(map, label_name);
-
-    if (label_index == -1) {
-        label_index = metrics_map_insert_label_name(map, label_name);
-        label_added = FLB_TRUE;
-    }
-
-    if (label_index == -1) {
-        return FLB_FALSE;
-    }
-
-    result = metrics_map_set_label_value(map,
-                                         label_index,
-                                         label_value,
-                                         FLB_TRUE,
-                                         label_added);
-
-    if(result == FLB_FALSE) {
-        return FLB_FALSE;
-    }
-
-    return FLB_TRUE;
-}
-
-int metrics_map_remove_label(struct cmt_map *map,
-                             char *label_name)
-{
-    ssize_t label_index;
-    int     result;
-
-    label_index = cmt_map_get_label_index(map, label_name);
-
-    if (label_index == -1) {
-        return FLB_TRUE;
-    }
-
-    map->label_count--;
-
-    result = metrics_map_remove_label_name(map, label_index);
-
-    if(result == FLB_TRUE) {
-        result = metrics_map_remove_label_value(map, label_index);
-    }
-
-    return result;
-}
-
-static int metrics_context_contains_dynamic_label(struct cmt *metrics_context,
-                                                  char *label_name)
-{
-    struct cfl_list      *metric_iterator;
-    struct cmt_histogram *histogram;
-    struct cmt_summary   *summary;
-    struct cmt_untyped   *untyped;
-    struct cmt_counter   *counter;
-    struct cmt_gauge     *gauge;
-
-    cfl_list_foreach(metric_iterator, &metrics_context->histograms) {
-        histogram = cfl_list_entry(metric_iterator, struct cmt_histogram, _head);
-
-        if(metrics_map_contains_label(histogram->map, label_name) == FLB_TRUE) {
-            return FLB_TRUE;
-        }
-    }
-
-    cfl_list_foreach(metric_iterator, &metrics_context->summaries) {
-        summary = cfl_list_entry(metric_iterator, struct cmt_summary, _head);
-
-        if(metrics_map_contains_label(summary->map, label_name) == FLB_TRUE) {
-            return FLB_TRUE;
-        }
-    }
-
-    cfl_list_foreach(metric_iterator, &metrics_context->untypeds) {
-        untyped = cfl_list_entry(metric_iterator, struct cmt_untyped, _head);
-
-        if(metrics_map_contains_label(untyped->map, label_name) == FLB_TRUE) {
-            return FLB_TRUE;
-        }
-    }
-
-    cfl_list_foreach(metric_iterator, &metrics_context->counters) {
-        counter = cfl_list_entry(metric_iterator, struct cmt_counter, _head);
-
-        if(metrics_map_contains_label(counter->map, label_name) == FLB_TRUE) {
-            return FLB_TRUE;
-        }
-    }
-
-    cfl_list_foreach(metric_iterator, &metrics_context->gauges) {
-        gauge = cfl_list_entry(metric_iterator, struct cmt_gauge, _head);
-
-        if(metrics_map_contains_label(gauge->map, label_name) == FLB_TRUE) {
-            return FLB_TRUE;
-        }
-    }
-
-    return FLB_FALSE;
-}
-
-static int metrics_context_insert_dynamic_label(struct cmt *metrics_context,
-                                                char *label_name,
-                                                char *label_value)
-{
-    struct cfl_list      *metric_iterator;
-    struct cmt_histogram *histogram;
-    struct cmt_summary   *summary;
-    struct cmt_untyped   *untyped;
-    struct cmt_counter   *counter;
-    int                   result;
-    struct cmt_gauge     *gauge;
-
-    cfl_list_foreach(metric_iterator, &metrics_context->histograms) {
-        histogram = cfl_list_entry(metric_iterator, struct cmt_histogram, _head);
-
-        result = metrics_map_insert_label(histogram->map,
-                                          label_name,
-                                          label_value);
-
-        if (result == FLB_FALSE) {
-            return FLB_FALSE;
-        }
-    }
-
-    cfl_list_foreach(metric_iterator, &metrics_context->summaries) {
-        summary = cfl_list_entry(metric_iterator, struct cmt_summary, _head);
-
-        result = metrics_map_insert_label(summary->map,
-                                          label_name,
-                                          label_value);
-
-        if (result == FLB_FALSE) {
-            return FLB_FALSE;
-        }
-    }
-
-    cfl_list_foreach(metric_iterator, &metrics_context->untypeds) {
-        untyped = cfl_list_entry(metric_iterator, struct cmt_untyped, _head);
-
-        result = metrics_map_insert_label(untyped->map,
-                                          label_name,
-                                          label_value);
-
-        if (result == FLB_FALSE) {
-            return FLB_FALSE;
-        }
-    }
-
-    cfl_list_foreach(metric_iterator, &metrics_context->counters) {
-        counter = cfl_list_entry(metric_iterator, struct cmt_counter, _head);
-
-        result = metrics_map_insert_label(counter->map,
-                                          label_name,
-                                          label_value);
-
-        if (result == FLB_FALSE) {
-            return FLB_FALSE;
-        }
-    }
-
-    cfl_list_foreach(metric_iterator, &metrics_context->gauges) {
-        gauge = cfl_list_entry(metric_iterator, struct cmt_gauge, _head);
-
-        result = metrics_map_insert_label(gauge->map,
-                                          label_name,
-                                          label_value);
-
-        if (result == FLB_FALSE) {
-            return FLB_FALSE;
-        }
-    }
-
-    return FLB_TRUE;
-}
-
-static int metrics_context_update_dynamic_label(struct cmt *metrics_context,
-                                                char *label_name,
-                                                char *label_value)
-{
-    struct cfl_list      *metric_iterator;
-    struct cmt_histogram *histogram;
-    struct cmt_summary   *summary;
-    struct cmt_untyped   *untyped;
-    struct cmt_counter   *counter;
-    int                   result;
-    struct cmt_gauge     *gauge;
-
-    cfl_list_foreach(metric_iterator, &metrics_context->histograms) {
-        histogram = cfl_list_entry(metric_iterator, struct cmt_histogram, _head);
-
-        result = metrics_map_update_label(histogram->map,
-                                          label_name,
-                                          label_value);
-
-        if (result == FLB_FALSE) {
-            return FLB_FALSE;
-        }
-    }
-
-    cfl_list_foreach(metric_iterator, &metrics_context->summaries) {
-        summary = cfl_list_entry(metric_iterator, struct cmt_summary, _head);
-
-        result = metrics_map_update_label(summary->map,
-                                          label_name,
-                                          label_value);
-
-        if (result == FLB_FALSE) {
-            return FLB_FALSE;
-        }
-    }
-
-    cfl_list_foreach(metric_iterator, &metrics_context->untypeds) {
-        untyped = cfl_list_entry(metric_iterator, struct cmt_untyped, _head);
-
-        result = metrics_map_update_label(untyped->map,
-                                          label_name,
-                                          label_value);
-
-        if (result == FLB_FALSE) {
-            return FLB_FALSE;
-        }
-    }
-
-    cfl_list_foreach(metric_iterator, &metrics_context->counters) {
-        counter = cfl_list_entry(metric_iterator, struct cmt_counter, _head);
-
-        result = metrics_map_update_label(counter->map,
-                                          label_name,
-                                          label_value);
-
-        if (result == FLB_FALSE) {
-            return FLB_FALSE;
-        }
-    }
-
-    cfl_list_foreach(metric_iterator, &metrics_context->gauges) {
-        gauge = cfl_list_entry(metric_iterator, struct cmt_gauge, _head);
-
-        result = metrics_map_update_label(gauge->map,
-                                          label_name,
-                                          label_value);
-
-        if (result == FLB_FALSE) {
-            return FLB_FALSE;
-        }
-    }
-
-    return FLB_TRUE;
-}
-
-static int metrics_context_transform_dynamic_label(struct cmt *metrics_context,
-                                                   char *label_name,
-                                                   label_transformer transformer)
-{
-    struct cfl_list      *metric_iterator;
-    struct cmt_histogram *histogram;
-    struct cmt_summary   *summary;
-    struct cmt_untyped   *untyped;
-    struct cmt_counter   *counter;
-    int                   result;
-    struct cmt_gauge     *gauge;
-
-    cfl_list_foreach(metric_iterator, &metrics_context->histograms) {
-        histogram = cfl_list_entry(metric_iterator, struct cmt_histogram, _head);
-
-        result = metrics_map_transform_label(histogram->map,
-                                             label_name,
-                                             transformer);
-
-        if (result == FLB_FALSE) {
-            return FLB_FALSE;
-        }
-    }
-
-    cfl_list_foreach(metric_iterator, &metrics_context->summaries) {
-        summary = cfl_list_entry(metric_iterator, struct cmt_summary, _head);
-
-        result = metrics_map_transform_label(summary->map,
-                                             label_name,
-                                             transformer);
-
-        if (result == FLB_FALSE) {
-            return FLB_FALSE;
-        }
-    }
-
-    cfl_list_foreach(metric_iterator, &metrics_context->untypeds) {
-        untyped = cfl_list_entry(metric_iterator, struct cmt_untyped, _head);
-
-        result = metrics_map_transform_label(untyped->map,
-                                             label_name,
-                                             transformer);
-
-        if (result == FLB_FALSE) {
-            return FLB_FALSE;
-        }
-    }
-
-    cfl_list_foreach(metric_iterator, &metrics_context->counters) {
-        counter = cfl_list_entry(metric_iterator, struct cmt_counter, _head);
-
-        result = metrics_map_transform_label(counter->map,
-                                             label_name,
-                                             transformer);
-
-        if (result == FLB_FALSE) {
-            return FLB_FALSE;
-        }
-    }
-
-    cfl_list_foreach(metric_iterator, &metrics_context->gauges) {
-        gauge = cfl_list_entry(metric_iterator, struct cmt_gauge, _head);
-
-        result = metrics_map_transform_label(gauge->map,
-                                             label_name,
-                                             transformer);
-
-        if (result == FLB_FALSE) {
-            return FLB_FALSE;
-        }
-    }
-
-    return FLB_TRUE;
-}
-
-static int metrics_context_upsert_dynamic_label(struct cmt *metrics_context,
-                                                char *label_name,
-                                                char *label_value)
-{
-    struct cfl_list      *metric_iterator;
-    struct cmt_histogram *histogram;
-    struct cmt_summary   *summary;
-    struct cmt_untyped   *untyped;
-    struct cmt_counter   *counter;
-    int                   result;
-    struct cmt_gauge     *gauge;
-
-    cfl_list_foreach(metric_iterator, &metrics_context->histograms) {
-        histogram = cfl_list_entry(metric_iterator, struct cmt_histogram, _head);
-
-        result = metrics_map_upsert_label(histogram->map,
-                                          label_name,
-                                          label_value);
-
-        if (result == FLB_FALSE) {
-            return FLB_FALSE;
-        }
-    }
-
-    cfl_list_foreach(metric_iterator, &metrics_context->summaries) {
-        summary = cfl_list_entry(metric_iterator, struct cmt_summary, _head);
-
-        result = metrics_map_upsert_label(summary->map,
-                                          label_name,
-                                          label_value);
-
-        if (result == FLB_FALSE) {
-            return FLB_FALSE;
-        }
-    }
-
-    cfl_list_foreach(metric_iterator, &metrics_context->untypeds) {
-        untyped = cfl_list_entry(metric_iterator, struct cmt_untyped, _head);
-
-        result = metrics_map_upsert_label(untyped->map,
-                                          label_name,
-                                          label_value);
-
-        if (result == FLB_FALSE) {
-            return FLB_FALSE;
-        }
-    }
-
-    cfl_list_foreach(metric_iterator, &metrics_context->counters) {
-        counter = cfl_list_entry(metric_iterator, struct cmt_counter, _head);
-
-        result = metrics_map_upsert_label(counter->map,
-                                          label_name,
-                                          label_value);
-
-        if (result == FLB_FALSE) {
-            return FLB_FALSE;
-        }
-    }
-
-    cfl_list_foreach(metric_iterator, &metrics_context->gauges) {
-        gauge = cfl_list_entry(metric_iterator, struct cmt_gauge, _head);
-
-        result = metrics_map_upsert_label(gauge->map,
-                                          label_name,
-                                          label_value);
-
-        if (result == FLB_FALSE) {
-            return FLB_FALSE;
-        }
-    }
-
-    return FLB_TRUE;
-}
-
-static int metrics_context_remove_dynamic_label(struct cmt *metrics_context,
-                                                char *label_name)
-{
-    struct cfl_list      *metric_iterator;
-    struct cmt_histogram *histogram;
-    struct cmt_summary   *summary;
-    struct cmt_untyped   *untyped;
-    struct cmt_counter   *counter;
-    int                   result;
-    struct cmt_gauge     *gauge;
-
-    cfl_list_foreach(metric_iterator, &metrics_context->histograms) {
-        histogram = cfl_list_entry(metric_iterator, struct cmt_histogram, _head);
-
-        result = metrics_map_remove_label(histogram->map,
-                                          label_name);
-
-        if (result == FLB_FALSE) {
-            return FLB_FALSE;
-        }
-    }
-
-    cfl_list_foreach(metric_iterator, &metrics_context->summaries) {
-        summary = cfl_list_entry(metric_iterator, struct cmt_summary, _head);
-
-        result = metrics_map_remove_label(summary->map,
-                                          label_name);
-
-        if (result == FLB_FALSE) {
-            return FLB_FALSE;
-        }
-    }
-
-    cfl_list_foreach(metric_iterator, &metrics_context->untypeds) {
-        untyped = cfl_list_entry(metric_iterator, struct cmt_untyped, _head);
-
-        result = metrics_map_remove_label(untyped->map,
-                                          label_name);
-
-        if (result == FLB_FALSE) {
-            return FLB_FALSE;
-        }
-    }
-
-    cfl_list_foreach(metric_iterator, &metrics_context->counters) {
-        counter = cfl_list_entry(metric_iterator, struct cmt_counter, _head);
-
-        result = metrics_map_remove_label(counter->map,
-                                          label_name);
-
-        if (result == FLB_FALSE) {
-            return FLB_FALSE;
-        }
-    }
-
-    cfl_list_foreach(metric_iterator, &metrics_context->gauges) {
-        gauge = cfl_list_entry(metric_iterator, struct cmt_gauge, _head);
-
-        result = metrics_map_remove_label(gauge->map,
-                                          label_name);
-
-        if (result == FLB_FALSE) {
-            return FLB_FALSE;
-        }
-    }
-
-    return FLB_TRUE;
 }
 
 static int update_labels(struct cmt *metrics_context,
@@ -1263,24 +325,24 @@ static int update_labels(struct cmt *metrics_context,
     cfl_list_foreach(iterator, labels) {
         pair = cfl_list_entry(iterator, struct cfl_kv, _head);
 
-        result = metrics_context_contains_dynamic_label(metrics_context,
+        result = cmt_contains_dynamic_label(metrics_context,
                                                         pair->key);
 
         if (result == FLB_TRUE) {
-            result = metrics_context_update_dynamic_label(metrics_context,
-                                                          pair->key,
-                                                          pair->val);
+            result = cmt_update_dynamic_label(metrics_context,
+                                              pair->key,
+                                              pair->val);
 
             if (result == FLB_FALSE) {
                 return FLB_FALSE;
             }
         }
 
-        result = metrics_context_contains_static_label(metrics_context,
+        result = cmt_contains_static_label(metrics_context,
                                                        pair->key);
 
         if (result == FLB_TRUE) {
-            result = metrics_context_update_static_label(metrics_context,
+            result = cmt_update_static_label(metrics_context,
                                                          pair->key,
                                                          pair->val);
 
@@ -1303,11 +365,11 @@ static int insert_labels(struct cmt *metrics_context,
     cfl_list_foreach(iterator, labels) {
         pair = cfl_list_entry(iterator, struct cfl_kv, _head);
 
-        result = metrics_context_contains_dynamic_label(metrics_context,
+        result = cmt_contains_dynamic_label(metrics_context,
                                                         pair->key);
 
         if (result == FLB_TRUE) {
-            result = metrics_context_insert_dynamic_label(metrics_context,
+            result = cmt_insert_dynamic_label(metrics_context,
                                                           pair->key,
                                                           pair->val);
 
@@ -1316,7 +378,7 @@ static int insert_labels(struct cmt *metrics_context,
             }
         }
         else {
-            result = metrics_context_contains_static_label(metrics_context,
+            result = cmt_contains_static_label(metrics_context,
                                                            pair->key);
 
             if (result == FLB_FALSE) {
@@ -1344,13 +406,13 @@ static int upsert_labels(struct cmt *metrics_context,
     cfl_list_foreach(iterator, labels) {
         pair = cfl_list_entry(iterator, struct cfl_kv, _head);
 
-        result = metrics_context_contains_dynamic_label(metrics_context,
+        result = cmt_contains_dynamic_label(metrics_context,
                                                         pair->key);
 
         if (result == FLB_TRUE) {
-            result = metrics_context_upsert_dynamic_label(metrics_context,
-                                                          pair->key,
-                                                          pair->val);
+            result = cmt_upsert_dynamic_label(metrics_context,
+                                              pair->key,
+                                              pair->val);
 
             if (result == FLB_FALSE) {
                 return FLB_FALSE;
@@ -1380,23 +442,23 @@ static int delete_labels(struct cmt *metrics_context,
     mk_list_foreach(iterator, labels) {
         entry = mk_list_entry(iterator, struct flb_slist_entry, _head);
 
-        result = metrics_context_contains_dynamic_label(metrics_context,
+        result = cmt_contains_dynamic_label(metrics_context,
                                                         entry->str);
 
         if (result == FLB_TRUE) {
-            result = metrics_context_remove_dynamic_label(metrics_context,
-                                                          entry->str);
+            result = cmt_remove_dynamic_label(metrics_context,
+                                              entry->str);
 
             if (result == FLB_FALSE) {
                 return FLB_FALSE;
             }
         }
         else {
-            result = metrics_context_contains_static_label(metrics_context,
+            result = cmt_contains_static_label(metrics_context,
                                                            entry->str);
 
             if (result == FLB_TRUE) {
-                result = metrics_context_remove_static_label(metrics_context,
+                result = cmt_remove_static_label(metrics_context,
                                                              entry->str);
 
                 if (result == FLB_FALSE) {
@@ -1445,24 +507,24 @@ static int hash_labels(struct cmt *metrics_context,
     mk_list_foreach(iterator, labels) {
         entry = mk_list_entry(iterator, struct flb_slist_entry, _head);
 
-        result = metrics_context_contains_dynamic_label(metrics_context,
+        result = cmt_contains_dynamic_label(metrics_context,
                                                         entry->str);
 
         if (result == FLB_TRUE) {
-            result = metrics_context_transform_dynamic_label(metrics_context,
-                                                             entry->str,
-                                                             hash_transformer);
+            result = cmt_transform_dynamic_label(metrics_context,
+                                                 entry->str,
+                                                 hash_transformer);
 
             if (result == FLB_FALSE) {
                 return FLB_FALSE;
             }
         }
         else {
-            result = metrics_context_contains_static_label(metrics_context,
+            result = cmt_contains_static_label(metrics_context,
                                                            entry->str);
 
             if (result == FLB_TRUE) {
-                result = metrics_context_transform_static_label(metrics_context,
+                result = cmt_transform_static_label(metrics_context,
                                                                 entry->str,
                                                                 hash_transformer);
 

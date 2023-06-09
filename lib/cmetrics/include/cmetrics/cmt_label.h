@@ -21,6 +21,9 @@
 #define CMT_LABEL_H
 
 #include <cmetrics/cmetrics.h>
+#include <cmetrics/cmt_metric.h>
+
+typedef int (*label_transformer)(struct cmt_metric *, cfl_sds_t *value);
 
 struct cmt_label {
     cfl_sds_t key;             /* Label key */
@@ -44,7 +47,38 @@ int cmt_update_static_label(struct cmt *metrics_context,
                             char *label_value);
 int cmt_remove_static_label(struct cmt *metrics_context,
                             char *label_name);
+int cmt_transform_static_label(struct cmt *metrics_context,
+                               char *label_name,
+                               label_transformer transformer);
+
+int cmt_contains_dynamic_label(struct cmt *metrics_context,
+                               char *label_name);
+int cmt_insert_dynamic_label(struct cmt *metrics_context,
+                             char *label_name,
+                             char *label_value);
+int cmt_update_dynamic_label(struct cmt *metrics_context,
+                             char *label_name,
+                             char *label_value);
+int cmt_transform_dynamic_label(struct cmt *metrics_context,
+                                char *label_name,
+                                label_transformer transformer);
+int cmt_upsert_dynamic_label(struct cmt *metrics_context,
+                             char *label_name,
+                             char *label_value);
+int cmt_remove_dynamic_label(struct cmt *metrics_context,
+                             char *label_name);
 
 void cmt_label_destroy(struct cmt_label *label);
+
+int cmt_data_point_remove_label_value(struct cmt_metric *metric,
+                                      size_t label_index);
+int cmt_data_point_transform_label_value(struct cmt_metric *metric,
+                                         size_t label_index,
+                                         label_transformer transformer);
+int cmt_data_point_set_label_value(struct cmt_metric *metric,
+                                   size_t label_index,
+                                   char *label_value,
+                                   int overwrite,
+                                   int insert);
 
 #endif

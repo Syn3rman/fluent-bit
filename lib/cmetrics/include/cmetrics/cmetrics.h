@@ -44,7 +44,6 @@
 #include <cmetrics/cmt_compat.h>
 #include <cmetrics/cmt_math.h>
 #include <cmetrics/cmt_time.h>
-#include <cmetrics/cmt_label.h>
 #include <cmetrics/cmt_version.h>
 
 struct cmt {
@@ -78,5 +77,8 @@ struct cmt *cmt_create();
 void cmt_destroy(struct cmt *cmt);
 int cmt_label_add(struct cmt *cmt, char *key, char *val);
 char *cmt_version();
+
+#include <cmetrics/cmt_label.h>
+#include <cmetrics/cmt_map.h>
 
 #endif

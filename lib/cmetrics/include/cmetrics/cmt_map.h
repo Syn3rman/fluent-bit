@@ -49,12 +49,37 @@ struct cmt_map *cmt_map_create(int type, struct cmt_opts *opts,
                                int count, char **labels, void *parent);
 void cmt_map_destroy(struct cmt_map *map);
 
-struct cmt_metric *cmt_map_metric_create(uint64_t hash,
-                                         int labels_count, char **labels_val);
-
 struct cmt_map_label *cmt_map_label_create(char *name);
 ssize_t cmt_map_get_label_index(struct cmt_map *map, char *label_name);
+ssize_t cmt_map_insert_label_name(struct cmt_map *map, char *label_name);
+int cmt_map_remove_label_name(struct cmt_map *map,
+                              size_t label_index);
 void cmt_map_label_destroy(struct cmt_map_label *label);
+
+int cmt_map_convert_static_metric(struct cmt_map *map,
+                                  size_t label_index,
+                                  char *label_value);
+
+int cmt_map_contains_label(struct cmt_map *map, char *label_name);
+int cmt_map_transform_label(struct cmt_map *map,
+                            char *label_name,
+                            label_transformer transformer);
+int cmt_map_insert_label(struct cmt_map *map,
+                         char *label_name, char *label_value);
+int cmt_map_update_label(struct cmt_map *map,
+                         char *label_name, char *label_value);
+int cmt_map_upsert_label(struct cmt_map *map,
+                         char *label_name, char *label_value);
+int cmt_map_remove_label(struct cmt_map *map,
+                         char *label_name);
+
+int cmt_map_set_label_value(struct cmt_map *map, size_t label_index,
+                            char *label_value, int overwrite, int insert);
+int cmt_map_transform_label_value(struct cmt_map *map,
+                                  size_t label_index,
+                                  label_transformer transformer);
+int cmt_map_remove_label_value(struct cmt_map *map,
+                               size_t label_index);
 
 struct cmt_metric *cmt_map_metric_get(struct cmt_opts *opts, struct cmt_map *map,
                                       int labels_count, char **labels_val,
