@@ -46,6 +46,7 @@
 #include <cmetrics/cmt_time.h>
 #include <cmetrics/cmt_label.h>
 #include <cmetrics/cmt_version.h>
+#include <cmetrics/cmt_metric.h>
 
 struct cmt {
     /* logging */
@@ -78,5 +79,34 @@ struct cmt *cmt_create();
 void cmt_destroy(struct cmt *cmt);
 int cmt_label_add(struct cmt *cmt, char *key, char *val);
 char *cmt_version();
+
+int cmt_contains_static_label(struct cmt *metrics_context,
+                              char *label_name);
+int cmt_insert_static_label(struct cmt *metrics_context,
+                            char *label_name, char *label_value);
+int cmt_update_static_label(struct cmt *metrics_context,
+                            char *label_name, char *label_value);
+int cmt_transform_static_label(struct cmt *metrics_context,
+                               char *label_name,
+                               cmt_metric_transformer transformer);
+int cmt_upsert_static_label(struct cmt *metrics_context,
+                            char *label_name, char *label_value);
+int cmt_remove_static_label(struct cmt *metrics_context,
+                            char *label_name);
+
+int cmt_contains_dynamic_label(struct cmt *metrics_context,
+                               char *label_name);
+int cmt_insert_dynamic_label(struct cmt *metrics_context,
+                             char *label_name, char *label_value);
+int cmt_update_dynamic_label(struct cmt *metrics_context,
+                             char *label_name, char *label_value);
+int cmt_update_transform_dynamic_label(struct cmt *metrics_context,
+                                       char *label_name,
+                                       cmt_metric_transformer transformer);
+int cmt_update_upsert_dynamic_label(struct cmt *metrics_context,
+                                    char *label_name,
+                                    char *label_value);
+int cmt_update_remove_dynamic_label(struct cmt *metrics_context,
+                                    char *label_name);
 
 #endif

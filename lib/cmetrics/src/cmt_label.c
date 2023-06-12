@@ -98,3 +98,22 @@ int cmt_labels_count(struct cmt_labels *labels)
 
     return c;
 }
+
+void cmt_label_destroy(struct cmt_label *label)
+{
+    if (label != NULL) {
+        if (!cfl_list_entry_is_orphan(&label->_head)) {
+            cfl_list_del(&label->_head);
+        }
+
+        if (label->key != NULL) {
+            cfl_sds_destroy(label->key);
+        }
+
+        if (label->val != NULL) {
+            cfl_sds_destroy(label->val);
+        }
+
+        free(label);
+    }
+}

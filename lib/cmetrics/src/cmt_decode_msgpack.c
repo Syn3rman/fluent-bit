@@ -635,7 +635,7 @@ static int unpack_metric(mpack_reader_t *reader,
     }
 
     /* Maybe we could move this cmt_metric constructor code to its own file, add a
-     * destructor and update map_metric_create and map_metric_destroy to use them right?
+     * destructor and update map_metric_create and cmt_metric_destroy_map to use them right?
      */
 
     metric = calloc(1, sizeof(struct cmt_metric));

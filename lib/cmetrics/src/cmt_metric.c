@@ -21,6 +21,7 @@
 #include <cmetrics/cmt_metric.h>
 #include <cmetrics/cmt_math.h>
 #include <cmetrics/cmt_atomic.h>
+#include <cmetrics/cmt_map.h>
 
 static inline int metric_exchange(struct cmt_metric *metric, uint64_t timestamp,
                                   double new_value, double old_value)
@@ -139,4 +140,195 @@ uint64_t cmt_metric_get_timestamp(struct cmt_metric *metric)
     val = cmt_atomic_load(&metric->timestamp);
 
     return val;
+}
+
+struct cmt_metric *cmt_metric_create_map(uint64_t hash,
+                                         int labels_count, char **labels_val)
+{
+    int i;
+    char *name;
+    struct cmt_metric *metric;
+    struct cmt_map_label *label;
+
+    metric = calloc(1, sizeof(struct cmt_metric));
+    if (!metric) {
+        cmt_errno();
+        return NULL;
+    }
+    cfl_list_init(&metric->labels);
+    metric->val = 0.0;
+    metric->hash = hash;
+
+    for (i = 0; i < labels_count; i++) {
+        label = malloc(sizeof(struct cmt_map_label));
+        if (!label) {
+            cmt_errno();
+            goto error;
+        }
+
+        name = labels_val[i];
+        label->name = cfl_sds_create(name);
+        if (!label->name) {
+            cmt_errno();
+            free(label);
+            goto error;
+        }
+        cfl_list_add(&label->_head, &metric->labels);
+    }
+
+    return metric;
+
+ error:
+    free(metric);
+    return NULL;
+}
+
+void cmt_metric_destroy_map(struct cmt_metric *metric)
+{
+    struct cfl_list *tmp;
+    struct cfl_list *head;
+    struct cmt_map_label *label;
+
+    cfl_list_foreach_safe(head, tmp, &metric->labels) {
+        label = cfl_list_entry(head, struct cmt_map_label, _head);
+        cfl_sds_destroy(label->name);
+        cfl_list_del(&label->_head);
+        free(label);
+    }
+
+    if (metric->hist_buckets) {
+        free(metric->hist_buckets);
+    }
+    if (metric->sum_quantiles) {
+        free(metric->sum_quantiles);
+    }
+
+    cfl_list_del(&metric->_head);
+    free(metric);
+}
+
+int cmt_metric_data_point_remove_label_value(struct cmt_metric *metric,
+                                             size_t label_index)
+{
+    struct cfl_list      *iterator;
+    struct cmt_map_label *label;
+    size_t                index;
+
+    index = 0;
+
+    cfl_list_foreach(iterator, &metric->labels) {
+        label = cfl_list_entry(iterator, struct cmt_map_label, _head);
+
+        if (label_index == index) {
+            cmt_map_label_destroy(label);
+
+            return CMT_TRUE;
+        }
+
+        index++;
+    }
+
+    return CMT_FALSE;
+}
+
+int cmt_metric_data_point_transform_label_value(struct cmt_metric *metric,
+                                                size_t label_index,
+                                                cmt_metric_transformer transformer)
+{
+    struct cfl_list      *iterator;
+    struct cmt_map_label *label;
+    size_t                index;
+
+    index = 0;
+
+    cfl_list_foreach(iterator, &metric->labels) {
+        label = cfl_list_entry(iterator, struct cmt_map_label, _head);
+
+        if (label_index == index) {
+            return transformer(metric, &label->name);
+        }
+
+        index++;
+    }
+
+    return CMT_FALSE;
+}
+
+int cmt_metric_data_point_set_label_value(struct cmt_metric *metric,
+                                          size_t label_index,
+                                          char *label_value,
+                                          int overwrite,
+                                          int insert)
+{
+    struct cmt_map_label *new_label;
+    struct cfl_list      *iterator;
+    cfl_sds_t             result;
+    size_t                index;
+    struct cmt_map_label *label;
+
+    label = NULL;
+    index = 0;
+
+    cfl_list_foreach(iterator, &metric->labels) {
+        label = cfl_list_entry(iterator, struct cmt_map_label, _head);
+
+        if (label_index == index) {
+            break;
+        }
+
+        index++;
+    }
+
+    if (label_index != index) {
+        return CMT_FALSE;
+    }
+
+    if (insert == CMT_TRUE) {
+        new_label = cmt_map_label_create(label_value);
+
+        if (new_label == NULL) {
+            return CMT_FALSE;
+        }
+
+        if (label != NULL) {
+            cfl_list_add_after(&new_label->_head,
+                               &label->_head,
+                               &metric->labels);
+        }
+        else {
+            cfl_list_append(&new_label->_head,
+                            &metric->labels);
+        }
+    }
+    else {
+        if (label == NULL) {
+            return CMT_FALSE;
+        }
+
+        if (label->name == NULL) {
+            label->name = cfl_sds_create(label_value);
+
+            if (label->name == NULL) {
+                return CMT_FALSE;
+            }
+        }
+        else {
+            if (overwrite == CMT_TRUE ||
+                cfl_sds_len(label->name) == 0) {
+                cfl_sds_set_len(label->name, 0);
+
+                result = cfl_sds_cat(label->name,
+                                     label_value,
+                                     strlen(label_value));
+
+                if (result == NULL) {
+                    return CMT_FALSE;
+                }
+
+                label->name = result;
+            }
+        }
+    }
+
+    return CMT_TRUE;
 }

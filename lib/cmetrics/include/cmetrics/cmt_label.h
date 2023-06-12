@@ -37,4 +37,6 @@ void cmt_labels_destroy(struct cmt_labels *labels);
 int cmt_labels_add_kv(struct cmt_labels *labels, char *key, char *val);
 int cmt_labels_count(struct cmt_labels *labels);
 
+void cmt_label_destroy(struct cmt_label *label);
+
 #endif

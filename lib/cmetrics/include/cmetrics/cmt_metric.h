@@ -45,6 +45,8 @@ struct cmt_metric {
     struct cfl_list _head;
 };
 
+typedef int (*cmt_metric_transformer)(struct cmt_metric *, cfl_sds_t *value);
+
 void cmt_metric_set(struct cmt_metric *metric, uint64_t timestamp, double val);
 void cmt_metric_inc(struct cmt_metric *metric, uint64_t timestamp);
 void cmt_metric_dec(struct cmt_metric *metric, uint64_t timestamp);
@@ -75,5 +77,18 @@ void cmt_metric_hist_sum_add(struct cmt_metric *metric,
                              uint64_t timestamp, double val);
 void cmt_metric_hist_sum_set(struct cmt_metric *metric, uint64_t timestamp,
                              double val);
+
+struct cmt_metric *cmt_metric_create_map(uint64_t hash,
+                                         int labels_count, char **labels_val);
+void cmt_metric_destroy_map(struct cmt_metric *metric);
+
+int cmt_metric_data_point_remove_label_value(struct cmt_metric *metric,
+                                             size_t label_index);
+int cmt_metric_data_point_transform_label_value(struct cmt_metric *metric,
+                                                size_t label_index,
+                                                cmt_metric_transformer transformer);
+int cmt_metric_data_point_set_label_value(struct cmt_metric *metric,
+                                          size_t label_index, char *label_value,
+                                          int overwrite, int insert);
 
 #endif
